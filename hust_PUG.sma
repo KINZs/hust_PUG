@@ -1,10 +1,22 @@
-/* HUST Pick-Up-Game Mode Plugin
+/* AMX Mod X based Script (for MOD Counter-Strike)
 *
-*   AUTH:   real (from China, HUST CSer & NUDT)
-*   CONT:   bigbryant@qq.com
-*   VERS:   1.3
+*   HUST Pick-Up-Game Mode Plugin
 *
-*   Update: 2016-02-14
+*   ©¦  Author  :       Chen Shi (aka. real, from China, HUST CSer & NUDT)
+*   ©¦  Contact :       bigbryant@qq.com
+*   ©¦  Version :       1.3
+*
+*   This plugin is free software; you can redistribute it and/or modify it
+*   under the terms of the GNU General Public License as published by the
+*   Free Software Foundation; either version 2 of the License, or (at
+*   your option) any later version.
+*
+*   This plugin is distributed in the hope that it will be useful, but
+*   WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+*   General Public License for more details.
+*
+*   ©¦  Changelog: 2016-02-14
 *
 *       1.3:    1) merged ShowMoney and PlayerMenu into plugin
 *               2) set endless round time in warmup time
@@ -36,7 +48,8 @@
 *               "hp_kniferound" set to 1 to enable a knife round before firsthalf
 *               "hp_teamlimit" set 1 to enable team limitation when choosing team
 *
-*/
+*
+===============================================================================*/
 
 #pragma semicolon 1
 
@@ -51,15 +64,23 @@
 #tryinclude "colorchat"
 #tryinclude "dhudmessage"
 
-#if !defined _colorchat_included
-    #assert "colorchat.inc or AMX MOD X 1.8.3+ required.^nDownload colorchat.inc at https://forums.alliedmods.net/showthread.php?t=94960"
+#if AMXX_VERSION_NUM < 180
+    #assert "AMX MOD X 1.8.0+ is required, compiling will be terminated..."
+    #endinput
 #endif
 
-#if !defined _dhudmessage_included
-    #assert "dhudmessage.inc or AMX MOD X 1.8.3+ required.^nDownload dhudmessage.inc at https://forums.alliedmods.net/showthread.php?t=149210"
+#if AMXX_VERSION_NUM < 183
+    #if !defined _colorchat_included
+        #assert "colorchat.inc required.^nDownload colorchat.inc at https://forums.alliedmods.net/showthread.php?t=94960"
+    #endif
+
+    #if !defined _dhudmessage_included
+        #assert "dhudmessage.inc required.^nDownload dhudmessage.inc at https://forums.alliedmods.net/showthread.php?t=149210"
+    #endif
 #endif
 
-//------------------------------------------------
+//====PRE-PROCESSING FINISHED===================================================
+
 
 new const PLUGIN_NAME[]     =   "HUST PUG";
 new const PLUGIN_VERSION[]  =   "1.3";
@@ -201,9 +222,10 @@ new     g_Tnum, g_Cnum;                         // number of members for each te
 new     g_rdy;                                  // number of ready number
 new     g_WarmWeapon[MAX_PLAYERS + 1][2];       // record weapon that user have in warmup time
 
-// Scores ( 1, 2 represents first and second half, respectively )
-new     g_ScoreCT1, g_ScoreCT2, g_ScoreT1, g_ScoreT2, g_RoundNum;
-new     g_scorebuff[2];
+// Scores
+new     g_Score[2][2];          // storage for match score, pre-sub stands for team, lat-sub stands for 1, 2 half
+new     g_RoundNum;             // variable to record current match round
+new     g_scorebuff[2];         // score buffer that use to see if team scored
 
 // CVAR pointers
 new     g_pcKnifeRound;         // hp_kniferound
@@ -229,9 +251,9 @@ new     g_hmsgHideWeapon;       // handle for registered message "HideWeapon"
 new     g_hmsgWeapPickup;       // handle for registered message "WeapPickup"
 
 // some ham forward handles
-new     HamHook: g_hamSpawnPost;        // handle of HookPlayerSpawnPost
-new     HamHook: g_hamDeathFwd;         // handle of HookPlayerDeathFwd
-new     HamHook: g_hamTouch[3];         // handle of Ham_Touch for weaponbox, armoury and weapon_shield
+new     HamHook: g_hamPostSpawn;        // handle of HookPlayerSpawnPost
+new     HamHook: g_hamFwdDeath;         // handle of HookPlayerDeathFwd
+new     HamHook: g_hamPostTouch[3];     // handle of Ham_Touch for weaponbox, armoury and weapon_shield
 
 // forward handles
 new     g_hfwdGetCvarFloat;
@@ -250,13 +272,33 @@ new     g_mPickTeam;                    // pickteam menu count
 
 new     g_hostname[32];                 // hostname of server
 
+//====GLOBAL VAR DEFINITION FINISHED============================================
 
-// Public Show Message functions ===============================================
-//
-//
+
+
+//==============================================================================
+//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
+//  ©¦  GENERIC MESSAGE RELATED FUNCTIONS  ©¦
+//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
+//      ¡ú CheckHostName
+//      ¡ú ClearHUDPos
+//      ¡ú findHUDPos
+//      ¡ú ServerSay
+//          ©¸ client_print_color *
+//      ¡ú ShowReadyList
+//      ¡ú ShowNotification
+//      ¡ú ShowHUDScore
+//      ¡ú readMap
+//      ¡ú SetShowMoneyTask
+//          ©¸ ShowTeamMoney ¡û
 //==============================================================================
 
-// function to obtain hostname of server
+/*
+    Checks name of current hostname by checking CVAR "hostname"
+    
+    @param  none
+    @return none
+*/
 public CheckHostName()
 {
     get_pcvar_string( g_pcHostName, g_hostname, 31 );
@@ -264,7 +306,14 @@ public CheckHostName()
     return;
 }
 
-// function to remove PLRDY display pos flag
+/*
+    This function frees the display position for PlayerReady HUD messages.
+    The parameter is sent by a set_task() function
+    
+    @param  para[0]     :    position offsets compared to original position
+    @param  para[1]     :    indicate positive/nagative offsets
+    @return none
+*/
 public ClearHUDPos( const para[] )
 {
     g_HudPlRdyPosFlag[para[0]] &= ~( 1 << para[1] );
@@ -272,7 +321,13 @@ public ClearHUDPos( const para[] )
     return;
 }
 
-// find available position for PLRDY display
+/*
+    This function finds an available position for PlayerReady HUD message.
+    The private array para[] is used for sending parameters to ClearHUDPos
+    
+    @param  none
+    @return             :   the y-axis offset of an available display position
+*/
 Float: findHUDPos()
 {
     static i, para[2];
@@ -299,8 +354,14 @@ Float: findHUDPos()
     return 0.0;
 }
 
-// Function to make color chat of server
-// need colorchat.inc
+/*
+    This function generates server prompts similar to server_cmd( "say %s", Msg[] ).
+    This function uses client_print_color() (requires colorchat.inc or AMXX183+) to
+    create colored messages.
+    
+    @param  fmt[]       :   formatted string
+    @return none
+*/
 ServerSay( const fmt[], any:... )
 {
     static Msg[256];
@@ -315,8 +376,18 @@ ServerSay( const fmt[], any:... )
     return;
 }
 
-// Function to show ready list every certain time interval
-// related to TASKID_SHOWREADY
+/*
+    This function shows a list under radar to indicate "ready" and "unready"
+    player list. The list uses normal HUD system.
+    
+    HUD params:
+        ©À CHANNEL:    CH_RDYLIST
+        ©À POSITION:   HUD_POS_RDYLIST[]
+        ©¸ COLOR:      #00FF00 (green)
+    
+    @param  none
+    @return none
+*/
 public ShowReadyList()
 {
     new i, id, CsTeams: team, itot, iurdy;
@@ -335,7 +406,7 @@ public ShowReadyList()
 
         formatex( name, 31, "%s", g_name[id] );
         if( team == CS_TEAM_T )
-            formatex( teamtag, 4, " (T)" );
+            formatex( teamtag, 4, "(T)" );
         else
             formatex( teamtag, 4, "(CT)" );
         if( g_ready[id] )
@@ -349,8 +420,18 @@ public ShowReadyList()
     return;
 }
 
-// Function to show warmup message every certain time interval
-// related to TASKID_SHOWNOTIFY
+/*
+    This function shows a pre-defined text on the top-center of screen in warmup 
+    time. The message uses normal HUD system.
+    
+    HUD params:
+        ©À CHANNEL:    CH_NOTIFY
+        ©À POSITION:   HUD_POS_NOTIFY[]
+        ©¸ COLOR:      #00FFFF (cyan)
+    
+    @param  none
+    @return none
+*/
 public ShowNotification()
 {
     set_hudmessage( 0x00, 0xff, 0xff, HUD_POS_NOTIFY[0], HUD_POS_NOTIFY[1], 0, 0.0, 19.8, 0.1, 0.1, CH_NOTIFY );
@@ -359,13 +440,23 @@ public ShowNotification()
     return;
 }
 
-// Function to show Scoreboard when match is on live
-// related to TASKID_SHOWSCORE
+/*
+    This function shows a scoreboard on the top-center of screen in match. 
+    The message uses normal HUD system.
+    
+    HUD params:
+        ©À CHANNEL:    CH_SCOREBOARD
+        ©À POSITION:   HUD_POS_SCOREBOARD[]
+        ©¸ COLOR:      #FFFFFF (white)
+    
+    @param  none
+    @return none
+*/
 public ShowHUDScore()
 {
     static Msg[256], len;
-    new St = g_ScoreT1 + g_ScoreT2;
-    new Sc = g_ScoreCT1 + g_ScoreCT2;
+    new St = g_Score[0][0] + g_Score[0][1];
+    new Sc = g_Score[1][0] + g_Score[1][1];
     new tt = g_RoundNum;
     
     switch( g_StatusNow ) {
@@ -383,12 +474,135 @@ public ShowHUDScore()
     return;
 }
 
-// public functional functions, swap livestatus etc.============================
-//
-//
+/*
+    This function load map config files from server files. 
+    
+    @param  none
+    @return none
+*/
+readMap()
+{
+    new maps_ini_file[64];
+    
+    g_Maps = ArrayCreate( 32 );
+    get_configsdir( maps_ini_file, 63 );
+    format( maps_ini_file, 63, "%s/maps.ini", maps_ini_file );
+    if ( !file_exists( maps_ini_file ) )
+        get_cvar_string( "mapcyclefile", maps_ini_file, 63 );
+    if ( !file_exists( maps_ini_file ) )
+        formatex( maps_ini_file, 63, "mapcycle.txt" );
+    
+    new fp = fopen( maps_ini_file, "r" );
+    
+    if( !fp ) return;
+        
+    new textline[256], mapname[32];
+    
+    while( !feof( fp ) ) {
+        fgets( fp, textline, 255 );
+        
+        if( textline[0] == ';' ) continue;
+        if( parse( textline, mapname, 31 ) < 1 ) continue;
+        if( !is_map_valid( mapname ) ) continue;
+            
+        ArrayPushString( g_Maps, mapname );
+        g_Mapnum++;
+    }
+    fclose( fp );
+    
+    return;
+}
+
+/*
+    This function set a delay to show team money and ShowTeamMoney actually shows
+    the team money for corresponding teams. This function use a normal HUD message.
+    
+    HUD params:
+        ©À CHANNEL:    CH_SHOWMONEY
+        ©À POSITION:   HUD_POS_SHOWMONEY[]
+        ©¸ COLOR:      #FF0000 (red) TERRORISTs
+                      #0000FF (blue) CTs
+    
+    @param  none
+    @return none
+*/
+SetShowMoneyTask()
+{
+    if( StatLive() && get_pcvar_num( g_pcShowMoney ) == 1 ) 
+        set_task( 0.1, "ShowTeamMoney" );
+        
+    return;
+}
+public ShowTeamMoney()
+{
+    static Playerid[32], CsTeams: team[32], MsgT[256], MsgCT[256], lenT, lenCT;
+    new i, money, PlayerNum, id;
+    new Float: holdtime;
+    
+    get_players( Playerid, PlayerNum, "h", "" );
+    lenT = formatex( MsgT, 255, "%L :^n^n", LANG_SERVER, "TELL_MONEY_TITLE_T" );
+    lenCT = formatex( MsgCT, 255, "%L £º^n^n", LANG_SERVER, "TELL_MONEY_TITLE_CT" );
+    for( i = 0; i < PlayerNum; i++ ) {
+        id = Playerid[i];
+        team[i] = g_teamHash[id];
+        switch( team[i] ) {
+            case CS_TEAM_CT: {
+                money = cs_get_user_money( id );
+                lenCT += formatex( MsgCT[lenCT], 255 - lenCT, "%s    ( %d )^n", g_name[id], money );
+            }
+            case CS_TEAM_T: {
+                money = cs_get_user_money( id );
+                lenT += formatex( MsgT[lenT], 255 - lenT, "%s    ( %d )^n", g_name[id], money );
+            }
+        }
+    }
+    
+    holdtime = get_cvar_float( "mp_freezetime" ) - 1.0;
+    for( i = 0; i < PlayerNum; i++ ) {
+        id = Playerid[i];
+        switch( team[i] ) {
+            case CS_TEAM_CT: {
+                set_hudmessage( 0x00, 0x00, 0xff, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, CH_SHOWMONEY );
+                show_hudmessage( id, MsgCT );
+            }
+            case CS_TEAM_T:{
+                set_hudmessage( 0xff, 0x00, 0x00, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, CH_SHOWMONEY );
+                show_hudmessage( id, MsgT );
+            }
+        }
+    }
+    
+    return;
+}
+
+//==============================================================================
+//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
+//  ©¦  GENERIC USEFUL FUNCTIONS  ©¦
+//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
+//      ¡ú SwapTeam
+//          ©À swap_int ¡û
+//          ©¸ ServerSay
+//      ¡ú StatLive
+//      ¡ú StatMatch
+//      ¡ú InitPlayerInfo
+//      ¡ú RefreshReadyList
+//          ©¸ PutPlayer ¡û
+//      ¡ú StripWeapon
+//      ¡ú client_infochanged
+//      ¡ú SetAllowGrens
+//          ©À {*fwdSetInfiniteBuyTime*}
+//          ©À {*fwdSetModel*}
+//          ©¸ {*msgWeapPickup*}
 //==============================================================================
 
-// function to swap value of two int variables
+/*
+    This function exchange values of two integer variables
+    
+    swap_int( int *, int * )
+    
+    @param  a, b    :   variables need to swap their values
+    @return none
+*/
 swap_int( &a, &b )
 {
     a = a ^ b;
@@ -398,7 +612,16 @@ swap_int( &a, &b )
     return;
 }
 
-// Swap CT & Ts teams
+/*
+    This function alters team for CTs and Ts players. cs_set_user_team() is used
+    to change teams, and this function will not trigger TeamInfo event. The user
+    model cannot be selective either. Before the swap procedure, 
+    cs_set_user_defuse() is used to strip defuse kit for CTs and Bomber will drop
+    C4.
+    
+    @param  none
+    @return none
+*/
 public SwapTeam()
 {
     new i, id, CsTeams: team, wbox;
@@ -413,7 +636,7 @@ public SwapTeam()
                 if( is_user_alive( id ) && user_has_weapon( id, CSW_C4 ) ) {
                     engclient_cmd( id, "drop", "weapon_c4" );
                     
-                    new c4ent = engfunc( EngFunc_FindEntityByString, -1, "classname", "weapon_c4" );
+                    new c4ent = engfunc( EngFunc_FindEntityByString, 0, "classname", "weapon_c4" );
                     if( c4ent ) {
                         wbox = pev( c4ent, pev_owner );
                         if( wbox != 0 && wbox != id ) needtrans = true;
@@ -439,8 +662,8 @@ public SwapTeam()
     }   
     
     // swap scores and number of players
-    swap_int( g_ScoreT1, g_ScoreCT1 );
-    swap_int( g_ScoreT2, g_ScoreCT2 );
+    swap_int( g_Score[0][0], g_Score[1][0] );
+    swap_int( g_Score[0][1], g_Score[1][1] );
     swap_int( g_Tnum, g_Cnum );
     
     ServerSay( "%L", LANG_SERVER, "PUG_TEAMSWAP_FINISH" );
@@ -448,20 +671,31 @@ public SwapTeam()
     return;
 }
 
-// Check if now a match on live
-bool: StatLive()
-{
+/*
+    These two function are almost the same. The difference between them,
+    Live -  stands for a real matching status, only 1st/2nd half and overtime are
+            called LIVE.
+    Match - stands for there is a match on, except for STATUS_WARM, all other status
+            are all MATCH on.
+    
+    @param  none
+    @return none
+*/
+bool: StatLive() {
     return ( g_StatusNow != STATUS_WARM && g_StatusNow != STATUS_INTER );
 }
-
-// Check if now a match on ( exclude WARM and INTERMISSION )
-bool: StatMatch()
-{
+bool: StatMatch() {
     return ( g_StatusNow != STATUS_WARM );
 }
 
-// Initialize all players infomation
-// usually called when firstly loaded or match ended
+/*
+    This function initialize the player ready status and player team hash table.
+    This function will be called when plugin firstly loaded, EnterIntermission and
+    Match end. Or other situation that need player to use "say ready" command.
+    
+    @param  none
+    @return none
+*/
 InitPlayerInfo()
 {
     static tplayer[MAX_PLAYERS];
@@ -485,8 +719,14 @@ InitPlayerInfo()
     return;
 }
 
-// To refresh the player information now
-// called when players enters the server or leave server
+/*
+    This function updates the player information instantly.
+    This function will be called after player using "jointeam" or "chooseteam"
+    command with 0.1sec delay to fix display bug of readylist.
+    
+    @param  none
+    @return none
+*/
 public RefreshReadyList()
 {
     new i, id, CsTeams: oldteam, CsTeams: nowteam;
@@ -502,7 +742,15 @@ public RefreshReadyList()
     return;
 }
 
-// Make information update when refreshing info list
+/*
+    This function updates the player team and name.
+    This function will be called in function RefreshReadyList().
+    
+    @param  id      :   index of player that needs to be updated
+    @param  oldteam :   original team of player
+    @param  newteam :   new team of player
+    @return none
+*/
 PutPlayer( id, CsTeams: oldteam, CsTeams: newteam )
 { 
     if( oldteam == newteam ) return;
@@ -541,8 +789,39 @@ PutPlayer( id, CsTeams: oldteam, CsTeams: newteam )
     return;
 }
 
-//------------------------------------------------
+/*
+    This function strips specific weapon from a player.
+    
+    @param  id      :   index of player that needs to be striped
+    @param  wid     :   weapon id
+    @return none
+*/
+StripWeapon( id, wid )
+{
+    if( !wid || !is_user_alive( id ) ) return;
+    
+    static wEnt;
+    
+    wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
+    if( !wEnt ) return;
+    
+    if( get_user_weapon( id ) == wid ) 
+        ExecuteHam( Ham_Weapon_RetireWeapon, wEnt );
+    if( !ExecuteHam( Ham_RemovePlayerItem, id, wEnt ) ) return;
+    ExecuteHam( Ham_Item_Kill, wEnt );
+    set_pev( id, pev_weapons, pev( id, pev_weapons ) & ~( 1 << wid ) );
+    
+    return;
+}
 
+/*
+    This is a default forward function that called when player's info has been
+    changed. Here it is used to fix display bug of readylist when player changes
+    their names.
+    
+    @param  id      :   index of player whose info has been changed
+    @return none
+*/
 public client_infochanged( id )
 {
     static name[32];
@@ -554,11 +833,86 @@ public client_infochanged( id )
     return PLUGIN_CONTINUE;
 }
 
-//------------------------------------------------
+/*
+    This is function enable/disables most forwards used in warmup time.
+    This is a very important function.
+    
+    @param  bifon       :   true - disable forwards, prepare for MATCH
+                            false - enable forwards, prepare for WARMUP
+    @return none
+*/
+SetAllowGrens( bool: bifon )
+{
+    if( bifon ) {
+        server_cmd( "amx_restrict off flash" );
+        server_cmd( "amx_restrict off hegren" );
+        server_cmd( "amx_restrict off sgren" );
+        unregister_forward( FM_CVarGetFloat, g_hfwdGetCvarFloat, 0 );
+        unregister_forward( FM_SetModel, g_hfwdSetModel, 0 );
+        // disable Spawn Ham Forward
+        DisableHamForward( g_hamPostSpawn );
+        DisableHamForward( g_hamFwdDeath );
+        DisableHamForward( g_hamPostTouch[0] );
+        DisableHamForward( g_hamPostTouch[1] );
+        DisableHamForward( g_hamPostTouch[2] );
+        // disable WeapPickup message
+        unregister_message( g_msgidWeapPickup, g_hmsgWeapPickup );
+    }
+    else {
+        server_cmd( "amx_restrict on flash" );
+        server_cmd( "amx_restrict on hegren" );
+        server_cmd( "amx_restrict on sgren" );
+        g_hfwdGetCvarFloat = register_forward( FM_CVarGetFloat, "fwdSetInfiniteBuyTime", 0 );
+        g_hfwdSetModel = register_forward( FM_SetModel, "fwdSetModel", 0 );
+        // enabel ham forward spawn
+        EnableHamForward( g_hamPostSpawn );
+        EnableHamForward( g_hamFwdDeath );
+        EnableHamForward( g_hamPostTouch[0] );
+        EnableHamForward( g_hamPostTouch[1] );
+        EnableHamForward( g_hamPostTouch[2] );
+        // register WeapPickup message
+        g_hmsgWeapPickup = register_message( g_msgidWeapPickup, "msgWeapPickup" );
+    }
+    
+    return;
+}
 
+//==============================================================================
+//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
+//  ©¦  WARM-UP-TIME GAME FUNCTIONS  ©¦
+//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
+//      ¡ú eventTeamInfo
+//          ©¸ DelayRespawn ¡û
+//      ¡ú hamFwdPlayerDeath
+//          ©¸ DelayRespawn ¡û
+//      ¡ú hamPostPlayerSpawn
+//          ©À DelaySetWeaponStat ¡û
+//          ©¸ RemoveProtect ¡û
+//      ¡ú msgWeapPickup
+//      ¡ú fwdSetModel
+//          ©¸ DelayRemoveEnt ¡û
+//      ¡ú hamPostWeaponTouch
+//          ©¸ DelayRemoveTask ¡û
+//      ¡ú SetMapObjective
+//          ©¸ {*msgHideWeapon*}
+//      ¡ú msgHideWeapon
+//      ¡ú fwdSetInfiniteBuyTime
+//==============================================================================
+
+/*
+    This function is registered to hook event "TeamInfo". It aims to respawn a
+    player instantly when they firstly join a team in warmup time. It called
+    DelayRespawn() function to respawn the player.
+    
+    Event "TeamInfo" has 2 arguments in which the first one indicates the 
+    player's index
+    
+    @param  none
+    @return none
+*/
 public eventTeamInfo()
 {
-    if( g_StatusNow != STATUS_WARM ) return;
+    if( StatMatch() ) return;
     
     new id = read_data( 1 );
     
@@ -567,147 +921,15 @@ public eventTeamInfo()
     return;
 }
 
-//------------------------------------------------
-
-// this function get the weapons hold when player death
-// g_WarmWeapon[id][0, 1]  0 - primary, 1 - secondary
-// bit ( 1 << 0 ) stands for burst mode
-// bit ( 1 << 1 ) stands for silencer mode
-// weapon id lies to the left begin with bit ( 1 << 2 )
-public HookDeathFwd( id, attacker, shouldgib )
-{
-    new wps[32], wpnum, i;
-        
-    get_user_weapons( id, wps, wpnum );
-    for( i = 0; i < wpnum; i++ ) {
-        if( CSW_PRIMARY & ( 1 << wps[i] ) ) {
-            g_WarmWeapon[id][0] = ( wps[i] << 2 );
-            switch( wps[i] ) {
-                case CSW_M4A1: {
-                    new m4a1 = find_ent_by_owner( m4a1, "weapon_m4a1", id );
-                    if( cs_get_weapon_silen( m4a1 ) ) g_WarmWeapon[id][0] |= 2;
-                }
-                case CSW_FAMAS: {
-                    new famas = find_ent_by_owner( famas, "weapon_famas", id );
-                    if( cs_get_weapon_burst( famas ) ) g_WarmWeapon[id][0] |= 1;
-                }
-            }
-        }
-        if( CSW_SECONDARY & ( 1 << wps[i] ) ) {
-            g_WarmWeapon[id][1] = ( wps[i] << 2 );
-            switch( wps[i] ) {
-                case CSW_USP: {
-                    new usp = find_ent_by_owner( usp, "weapon_usp", id );
-                    if( cs_get_weapon_silen( usp ) ) g_WarmWeapon[id][1] |= 2;
-                }
-                case CSW_GLOCK18: {
-                    new glock = find_ent_by_owner( glock, "weapon_glock18", id );
-                    if( cs_get_weapon_burst( glock ) ) g_WarmWeapon[id][1] |= 1;
-                }
-            }
-        }
-    }
-            
-    set_task( 0.5, "DelayRespawn", id + OFFSET_RSP );
+/*
+    This function is used to spawn a player in warmup time. It is usually called
+    with a small amount of delay time to ensure the correctness of the result. In
+    order to specify the task, player id will contain in taskid with offset
+    OFFSET_RSP.
     
-    return HAM_IGNORED;
-}
-
-//------------------------------------------------
-
-// this function set weapon silencer and burst after get the weapon
-public DelaySetWeaponStat( const para[] )
-{
-    new id = para[0];
-    new wid = para[1];
-    new silen = _:( ( para[2] & 2 ) != 0 );
-    new burst = _:( ( para[2] & 1 ) != 0 );        
-    
-    new wEnt = find_ent_by_owner( wEnt, WEAPON_NAME[wid], id );
-    cs_set_weapon_silen( wEnt, silen, 0 );
-    cs_set_weapon_burst( wEnt, burst );
-    
-    return;
-}
-
-//------------------------------------------------
-
-// this forward only triggered in warmup time
-// it gives weapons when player spawn
-public HookPlayerSpawnPost( id )
-{
-    if( !is_user_alive( id ) ) return HAM_IGNORED;
-    
-    static CsTeams: team, buff, para[3], wid, stat;
-    
-    cs_set_user_money( id, 16000 );
-    set_user_godmode( id, 1 );
-    cs_set_user_armor( id, 100, CS_ARMOR_VESTHELM );
-    team = g_teamHash[ id ];
-    switch( team ) {
-        case CS_TEAM_T: set_user_rendering( id, kRenderFxGlowShell, 0xff, 0, 0, kRenderNormal, 16 );
-        case CS_TEAM_CT: set_user_rendering( id, kRenderFxGlowShell, 0, 0, 0xff, kRenderNormal, 16 );
-    }
-    give_item( id, WEAPON_NAME[4] );
-    give_item( id, WEAPON_NAME[25] );
-    give_item( id, WEAPON_NAME[25] );
-    if( ( buff = g_WarmWeapon[id][0] ) != 0 ) {
-        wid = ( buff >> 2 );
-        stat = ( buff & 3 );
-        give_item( id, WEAPON_NAME[wid] );
-        if( ( wid == CSW_M4A1 || wid == CSW_FAMAS ) && ( stat != 0 ) ) {
-            para[0] = id;
-            para[1] = wid;
-            para[2] = stat;
-            set_task( 0.1, "DelaySetWeaponStat", _, para, 3 );
-        }
-    }
-    if( ( buff = g_WarmWeapon[id][1] ) != 0 ) {
-        wid = ( buff >> 2 );
-        stat = ( buff & 3 );
-        switch( team ) {
-            case CS_TEAM_T: 
-                if( wid != CSW_GLOCK18 ) {
-                    engclient_cmd( id, "drop", "weapon_glock18" );
-                    give_item( id, WEAPON_NAME[wid] );
-                }
-            case CS_TEAM_CT: 
-                if( wid != CSW_USP ) {
-                    engclient_cmd( id, "drop", "weapon_usp" );
-                    give_item( id, WEAPON_NAME[wid] );
-                }
-        }
-        if( ( wid == CSW_GLOCK18 || wid == CSW_USP ) && ( stat != 0 ) ) {
-            para[0] = id;
-            para[1] = wid;
-            para[2] = stat;
-            set_task( 0.1, "DelaySetWeaponStat", _, para, 3 );
-        }
-    }
-    g_WarmWeapon[id][0] = g_WarmWeapon[id][1] = 0;
-    
-    set_task( 3.0, "RemoveProtect", id + OFFSET_RSP );
-    
-    return HAM_IGNORED;
-}
-
-//------------------------------------------------
-
-public HookMsgWeapPickup( msgid, idest, id )
-{
-    if( g_WarmWeapon[id][1] == 0 ) return PLUGIN_CONTINUE;
-    
-    new wid = ( g_WarmWeapon[id][1] >> 2 );
-    new msgwid = get_msg_arg_int( 1 );
-    
-    if( ( ( 1 << msgwid ) & CSW_SECONDARY ) != 0 && wid != msgwid )  
-        return PLUGIN_HANDLED;
-    
-    return PLUGIN_CONTINUE;
-}
-
-//------------------------------------------------
-
+    @param  tskid       :   taskid = id + OFFSET_RSP is the task id.
+    @return none
+*/
 public DelayRespawn( tskid )
 {
     new id = tskid - OFFSET_RSP;
@@ -722,43 +944,207 @@ public DelayRespawn( tskid )
     
     return;
 }
-//------------------------------------------------
 
-public HookWeaponPickupPost( ent, id )
+/*
+    This function sets the weapon status after player re-acquire their weapons
+    in warmup time. Status of weapon include "silencer" and "burst mode". It is 
+    usually called with a small amount of delay time to ensure the correctness
+    of the result.
+    
+    @param  para[0]     :   index of player who is holding the weapon
+    @param  para[1]     :   index of weapon that needs to be set status
+    @param  para[2]     :   weapon status, see hamFwdPlayerDeath() function
+    @return none
+*/
+public DelaySetWeaponStat( const para[] )
 {
-    if( !is_user_alive( id ) ) return HAM_IGNORED;
+    new id = para[0];
+    new wid = para[1];
+    new silen = _:( ( para[2] & 2 ) != 0 );
+    new burst = _:( ( para[2] & 1 ) != 0 );
+    static wEnt;
+    
+    wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
+
+    cs_set_weapon_silen( wEnt, silen, 0 );
+    cs_set_weapon_burst( wEnt, burst );
+    
+    return;
+}
+
+/*
+    This function is a HAM forward to hook player death in warmup time. It aims
+    to acquire the guns player holding when they dead. Then it calls function 
+    DelayRespawn() with 0.5sec delay to respawn the player.
+    
+    g_hamFwdDeath = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 )
+
+        g_WarmWeapon[id][0, 1]  0 - primary, 1 - secondary
+        bit ( 1 << 0 ) stands for burst mode
+        bit ( 1 << 1 ) stands for silencer mode
+        weapon id lies to the left begin with bit ( 1 << 2 )
+    
+    @param  id      :   index of dead player
+    @return none
+*/
+public hamFwdPlayerDeath( id )
+{
+    new wps[32], wpnum, i;
+    static m4a1, famas, usp, glock;
         
-    set_task( 0.1, "DelayRemoveTask", ent );
-        
+    get_user_weapons( id, wps, wpnum );
+    for( i = 0; i < wpnum; i++ ) {
+        if( CSW_PRIMARY & ( 1 << wps[i] ) ) {
+            g_WarmWeapon[id][0] = ( wps[i] << 2 );
+            switch( wps[i] ) {
+                case CSW_M4A1: {
+                    m4a1 = find_ent_by_owner( 32, "weapon_m4a1", id );
+                    if( cs_get_weapon_silen( m4a1 ) ) g_WarmWeapon[id][0] |= 2;
+                }
+                case CSW_FAMAS: {
+                    famas = find_ent_by_owner( 32, "weapon_famas", id );
+                    if( cs_get_weapon_burst( famas ) ) g_WarmWeapon[id][0] |= 1;
+                }
+            }
+        }
+        if( CSW_SECONDARY & ( 1 << wps[i] ) ) {
+            g_WarmWeapon[id][1] = ( wps[i] << 2 );
+            switch( wps[i] ) {
+                case CSW_USP: {
+                    usp = find_ent_by_owner( 32, "weapon_usp", id );
+                    if( cs_get_weapon_silen( usp ) ) g_WarmWeapon[id][1] |= 2;
+                }
+                case CSW_GLOCK18: {
+                    glock = find_ent_by_owner( 32, "weapon_glock18", id );
+                    if( cs_get_weapon_burst( glock ) ) g_WarmWeapon[id][1] |= 1;
+                }
+            }
+        }
+    }
+            
+    set_task( 0.5, "DelayRespawn", id + OFFSET_RSP );
+    
     return HAM_IGNORED;
 }
 
-//------------------------------------------------
-
-public DelayRemoveTask( ent )
-{
-    if( pev_valid( ent ) ) return;
-        
-    new tskid = ent + OFFSET_SETMODEL;
+/*
+    This function is a HAM forward to hook player spawn in warmup time. It aims
+    to recover the guns player holding when they dead. It will be triggered by
+    function DelayRespawn(). It will also give the player 3secs godmode time.
     
-    if( task_exists( tskid, 0 ) ) remove_task( tskid, 0 );
-        
+    g_hamPostSpawn = RegisterHam( Ham_Spawn, "player", "hamPostPlayerSpawn", 1 )
+    
+    @param  id      :   index of spawned player
+    @return none
+*/
+public hamPostPlayerSpawn( id )
+{
+    if( !is_user_alive( id ) ) return HAM_IGNORED;
+    
+    static CsTeams: team, buff, para[3], wid, stat;
+    
+    cs_set_user_money( id, 16000 );
+    set_user_godmode( id, 1 );
+    cs_set_user_armor( id, 100, CS_ARMOR_VESTHELM );
+    team = g_teamHash[ id ];
+    switch( team ) {
+        case CS_TEAM_T: set_user_rendering( id, kRenderFxGlowShell, 0xff, 0, 0, kRenderNormal, 16 );
+        case CS_TEAM_CT: set_user_rendering( id, kRenderFxGlowShell, 0, 0, 0xff, kRenderNormal, 16 );
+    }
+    if( ( buff = g_WarmWeapon[id][1] ) != 0 ) {
+        wid = ( buff >> 2 );
+        stat = ( buff & 3 );
+        switch( team ) {
+            case CS_TEAM_T: 
+                if( wid != CSW_GLOCK18 ) {
+                    StripWeapon( id, CSW_GLOCK18 );
+                    give_item( id, WEAPON_NAME[wid] );
+                }
+            case CS_TEAM_CT: 
+                if( wid != CSW_USP ) {
+                    StripWeapon( id, CSW_USP );
+                    give_item( id, WEAPON_NAME[wid] );
+                }
+        }
+        if( ( wid == CSW_GLOCK18 || wid == CSW_USP ) && ( stat != 0 ) ) {
+            para[0] = id;
+            para[1] = wid;
+            para[2] = stat;
+            set_task( 0.1, "DelaySetWeaponStat", _, para, 3 );
+        }
+    }
+    if( ( buff = g_WarmWeapon[id][0] ) != 0 ) {
+        wid = ( buff >> 2 );
+        stat = ( buff & 3 );
+        give_item( id, WEAPON_NAME[wid] );
+        if( ( wid == CSW_M4A1 || wid == CSW_FAMAS ) && ( stat != 0 ) ) {
+            para[0] = id;
+            para[1] = wid;
+            para[2] = stat;
+            set_task( 0.1, "DelaySetWeaponStat", _, para, 3 );
+        }
+    }
+    g_WarmWeapon[id][0] = g_WarmWeapon[id][1] = 0;
+    give_item( id, WEAPON_NAME[4] );
+    give_item( id, WEAPON_NAME[25] );
+    give_item( id, WEAPON_NAME[25] );
+    
+    set_task( 3.0, "RemoveProtect", id + OFFSET_RSP );
+    
+    return HAM_IGNORED;
+}
+
+/*
+    This function is used to remove player's godmode 3secs after spawning.
+    
+    @param  tskid       :   tskid = id + OFFSET_RSP is the task id.,
+    @return none
+*/
+public RemoveProtect( tskid )
+{
+    new id = tskid - OFFSET_RSP;
+    
+    if( !is_user_alive( id ) ) return;
+    set_user_godmode( id, 0 );
+    set_user_rendering( id, kRenderFxNone );
+    
     return;
 }
 
-//------------------------------------------------
-
-public DelayRemoveEnt( tskid )
-{
-    new ent = tskid - OFFSET_SETMODEL;
+/*
+    This function hooks the message "WeapPickup" and it's blocks the HUD icon of
+    default secondary weapon if they had an alternative one. This message only
+    registered in warmup time.
     
-    if( pev_valid( ent ) ) dllfunc( DLLFunc_Think, ent );
-        
-    return;
+    g_msgidWeapPickup = get_user_msgid( "WeapPickup" )
+    g_hmsgWeapPickup = register_message( g_msgidWeapPickup, "msgWeapPickup" )
+    
+    @param  id          :   index of player
+    @return none
+*/
+public msgWeapPickup( msgid, idest, id )
+{
+    if( g_WarmWeapon[id][1] == 0 ) return PLUGIN_CONTINUE;
+    
+    new wid = ( g_WarmWeapon[id][1] >> 2 );
+    new msgwid = get_msg_arg_int( 1 );
+
+    if( ( ( 1 << msgwid ) & CSW_SECONDARY ) != 0 && wid != msgwid )  
+        return PLUGIN_HANDLED;
+    
+    return PLUGIN_CONTINUE;
 }
 
-//------------------------------------------------
-
+/*
+    This function is a fakemeta forward to hook player weapon drop in warmup time. 
+    The function calls function DelayRemoveEnt() to kill the entity in 5secs. 
+    
+    g_hfwdSetModel = register_forward( FM_SetModel, "fwdSetModel", 0 )
+    
+    @param  ent         :   index of entity
+    @param  model[]     :   model name
+    @return none
+*/
 public fwdSetModel( ent, const model[] )
 {
     if( !pev_valid( ent ) || !equali( model, WEAPON_MODEL_PREFIX, charsmax( WEAPON_MODEL_PREFIX ) ) )
@@ -779,59 +1165,155 @@ public fwdSetModel( ent, const model[] )
     return FMRES_IGNORED;
 }
 
-//------------------------------------------------
-
-public RemoveProtect( tskid )
+/*
+    This function kills a weaponbox that player drops in warmup time.
+    
+    @param  tskid       :   tskid = ent + OFFSET_SETMODEL is the task id
+    @return none
+*/
+public DelayRemoveEnt( tskid )
 {
-    new id = tskid - OFFSET_RSP;
+    new ent = tskid - OFFSET_SETMODEL;
     
-    if( !is_user_alive( id ) ) return;
-    set_user_godmode( id, 0 );
-    set_user_rendering( id, kRenderFxNone );
-    
+    if( pev_valid( ent ) ) dllfunc( DLLFunc_Think, ent );
+        
     return;
 }
 
-// load server map files
-readMap()
+/*
+    This function sets the task of DelayRemoveTask() task if the weapon has been
+    touched by a player.
+    
+    @param  ent         :   index of weapon box
+    @param  id          :   index of player
+    @return none
+*/
+public hamPostWeaponTouch( ent, id )
 {
-    new maps_ini_file[64];
-    
-    g_Maps = ArrayCreate( 32 );
-    get_configsdir( maps_ini_file, 63 );
-    format( maps_ini_file, 63, "%s/maps.ini", maps_ini_file );
-    if ( !file_exists( maps_ini_file ) )
-        get_cvar_string( "mapcyclefile", maps_ini_file, 63 );
-    if ( !file_exists( maps_ini_file ) )
-        formatex( maps_ini_file, 63, "mapcycle.txt" );
-    
-    new fp = fopen( maps_ini_file, "r" );
-    
-    if( !fp ) return;
+    if( !is_user_alive( id ) ) return HAM_IGNORED;
         
-    new textline[256], mapname[32];
-    
-    while( !feof( fp ) ) {
-        fgets( fp, textline, 255 );
+    set_task( 0.1, "DelayRemoveTask", ent );
         
-        if( textline[0] == ';' ) continue;
-        if( parse( textline, mapname, 31 ) < 1 ) continue;
-        if( !is_map_valid( mapname ) ) continue;
-            
-        ArrayPushString( g_Maps, mapname );
-        g_Mapnum++;
+    return HAM_IGNORED;
+}
+
+/*
+    This function removes the DelayRemoveEnt() task if the weapon has been
+    picked up.
+    
+    @param  ent         :   index of weapon box
+    @return none
+*/
+public DelayRemoveTask( ent )
+{
+    if( pev_valid( ent ) ) return;
+        
+    remove_task( ent + OFFSET_SETMODEL, 0 );
+        
+    return;
+}
+
+/*
+    This function removes objective entities on objective maps to create unlimited
+    round time in warmup time.
+    
+    @param  bifon       :   true - restore objective ents, prepare for MATCH
+                            false - remove objective ents, prepare for WARMUP
+    @return none
+*/
+SetMapObjective( const bool: bifon )
+{
+    static ent, i;
+    
+    ent = -1;
+    for( i = 0; i < sizeof( OBJECTIVE_ENTS ); i++ )
+        while( ( ent = engfunc( EngFunc_FindEntityByString, ent, "classname", bifon ? _OBJECTIVE_ENTS[i] : OBJECTIVE_ENTS[i] ) ) > 0 )
+            set_pev( ent, pev_classname, bifon ? OBJECTIVE_ENTS[i] : _OBJECTIVE_ENTS[i]);
+                
+    return;
+}
+
+/*
+    This function un/register the message related to hide round timer on bottom-
+    center screen. And "msgHideWeapon" is used to block round timer.
+    
+    @param  ifblock     :   true - register HideWeapon Msg, prepare for MATCH
+                            false - unregister HideWeapon Msg, prepare for WARMUP
+    @return none
+*/
+SetBlockRoundTimer( const bool: ifblock )
+{
+    if( ifblock ) {
+        g_hmsgHideWeapon = register_message( g_msgidHideWeapon, "msgHideWeapon" );
+        set_msg_block( g_msgidRoundTime, BLOCK_SET );
     }
-    fclose( fp );
+    else {
+        unregister_message( g_msgidHideWeapon, g_hmsgHideWeapon );
+        set_msg_block( g_msgidRoundTime, BLOCK_NOT );
+    }
     
     return;
 }
 
-// AUTO-start related functions=================================================
-//
-//
+public msgHideWeapon()
+{
+    set_msg_arg_int( 1, ARG_BYTE, get_msg_arg_int( 1 ) | HW_HIDE_TIMER_FLAG );
+    
+    return;
+}
+
+/*
+    This function is a fakemeta forward to hook and alter CVAR values. This is
+    used to change mp_buytime value in warmup time to apply infinite buy time
+    in warmup time. 
+    
+    g_hfwdGetCvarFloat = register_forward( FM_CVarGetFloat, "fwdSetInfiniteBuyTime", 0 )
+    
+    @param  szcvar      :   name of the cvar
+    @return none
+*/
+public fwdSetInfiniteBuyTime( const szcvar[] )
+{
+    if( equal( szcvar, "mp_buytime" ) ) {
+        forward_return( FMV_FLOAT, 99999.0 );
+        return FMRES_SUPERCEDE;
+    }
+    
+    return FMRES_IGNORED;
+}
+
+//==============================================================================
+//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
+//  ©¦  READY AUTO-START SYSTEM FUNCTIONS  ©¦
+//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
+//      ¡ú PlayerReady
+//          ©À findHUDPos
+//          ©¸ AutoStart ¡û
+//              ©À StopWarm
+//              ©À EnterKnifeRound
+//              ©À EnterFirstHalf
+//              ©¸ EnterSecondHalf
+//      ¡ú PlayerUNReady
+//          ©¸ findHUDPos
+//      ¡ú PlayerJoin
+//          ©À ShowSwapMenu
+//          ©¸ RefreshReadyList
 //==============================================================================
 
-// related to "say !ready" client command
+/*
+    This function marks player to ready status when player executed the pre-defined
+    command ( say !ready or sth. else ) and function PlayerUNReady() does the
+    opposite. These functions are using Director HUD message to show prompt messages.
+    Function findHUDPos() is called to find a available display position.
+    
+    HUD params:
+        ©À CHANNEL:    DIRECTOR HUD
+        ©À POSITION:   HUD_POS_PLRDY[] ( will be auto-adjusted to avoid overlap )
+        ©¸ COLOR:      #FFFFFF (white)
+    
+    @param  id          :   index of player
+    @return none
+*/
 public PlayerReady( id )
 {
     if( StatLive() ) {
@@ -861,7 +1343,6 @@ public PlayerReady( id )
     return PLUGIN_HANDLED;
 }
 
-// related to "say !notready" client command
 public PlayerUNReady( id )
 {
     if( StatLive() ) {
@@ -889,25 +1370,63 @@ public PlayerUNReady( id )
     return PLUGIN_HANDLED;
 }
 
-// Update info list when someone drops
-public client_disconnect( id )
+/*
+    This function checks if the match can start now. It is called by PlayerReady
+    and ForceStart function.
+    
+    @param  force       :   boolean var to indicate that if the match will be
+                            start forcely. If set to true, the game will auto
+                            start regardless of how many players have been
+                            ready.
+    @param  ifKnife     :   This parameter indicate if the match will have knife
+                            round before the first half. If set to -1, the knife
+                            round will be decided by CVAR hp_kniferound. Set to
+                            0 and 1 represent no knife round and force knife
+                            round, respectively.
+    @return none
+*/
+AutoStart( bool: force, ifKnife )
 {
-    new CsTeams: team = g_teamHash[id];
-    
-    g_teamHash[id] = CS_TEAM_UNASSIGNED;
-    if( g_ready[id] ) {
-        g_ready[id] = false;
-        g_rdy--;
+    if( g_rdy != 10 && !force ) return;
+        
+    if( g_rdy == 10 ) {
+        set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
+        show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_ALLREADY" );
     }
-    switch( team ) {
-        case CS_TEAM_T: g_Tnum--;
-        case CS_TEAM_CT: g_Cnum--;
+        
+    switch( g_StatusNow ) {
+        case STATUS_WARM: {
+            new bknife = get_pcvar_num( g_pcKnifeRound );
+        
+            StopWarm();
+    
+            if( ifKnife != -1 ) bknife = ifKnife;
+            switch( bknife ) {
+                case 0: EnterFirstHalf();
+                case 1: {
+                    set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
+                    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_KNIFEROUND_MSG" );
+                    set_task( 3.0, "EnterKnifeRound" );
+                }
+            }
+        }
+        case STATUS_INTER: {
+            remove_task( TASKID_SHOWREADY, 0 );
+            EnterSecondHalf();
+        }
     }
     
-    return PLUGIN_HANDLED;
+    return;
 }
 
-// function to overwrite original team select menu
+/*
+    This function is used for take the place of default client command "jointeam".
+    This function will check the team status before put player in corresponding
+    team.
+    
+    @param  id      :   index of player
+    @return none
+*/
 public PlayerJoin( id )
 {
     static args[16], argn;
@@ -957,136 +1476,39 @@ public PlayerJoin( id )
             return PLUGIN_HANDLED;
         }
     }
+    set_task( 0.1, "RefreshReadyList" );
     
     return PLUGIN_HANDLED;
 }
 
-//------------------------------------------------
-
-AutoStart( bool: force, ifKnife )
+// Update info list when someone drops
+public client_disconnect( id )
 {
-    if( g_rdy != 10 && !force ) return;
-        
-    if( g_rdy == 10 ) {
-        set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
-        show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_ALLREADY" );
-    }
-        
-    switch( g_StatusNow ) {
-        case STATUS_WARM: {
-            new bknife = get_pcvar_num( g_pcKnifeRound );
-        
-            StopWarm();
+    new CsTeams: team = g_teamHash[id];
     
-            if( ifKnife != -1 ) bknife = ifKnife;
-            switch( bknife ) {
-                case 0: EnterFirstHalf();
-                case 1: {
-                    set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
-                    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_KNIFEROUND_MSG" );
-                    set_task( 3.0, "EnterKnifeRound" );
-                }
-            }
-        }
-        case STATUS_INTER: {
-            remove_task( TASKID_SHOWREADY, 0 );
-            EnterSecondHalf();
-        }
+    g_teamHash[id] = CS_TEAM_UNASSIGNED;
+    if( g_ready[id] ) {
+        g_ready[id] = false;
+        g_rdy--;
+    }
+    switch( team ) {
+        case CS_TEAM_T: g_Tnum--;
+        case CS_TEAM_CT: g_Cnum--;
     }
     
-    return;
+    return PLUGIN_HANDLED;
 }
+
+
 
 // Warmup time game related ====================================================
 // Block objective map, respawning, etc.
 //
 //==============================================================================
 
-SetMapObjective( const bool: bifon )
-{
-    static ent, i;
-    
-    ent = -1;
-    for( i = 0; i < sizeof( OBJECTIVE_ENTS ); i++ )
-        while( ( ent = engfunc( EngFunc_FindEntityByString, ent, "classname", bifon ? _OBJECTIVE_ENTS[i] : OBJECTIVE_ENTS[i] ) ) > 0 )
-            set_pev( ent, pev_classname, bifon ? OBJECTIVE_ENTS[i] : _OBJECTIVE_ENTS[i]);
-                
-    return;
-}
-
-// func to set block round timer display
-SetBlockRoundTimer( const bool: ifblock )
-{
-    if( ifblock ) {
-        g_hmsgHideWeapon = register_message( g_msgidHideWeapon, "msgHideWeapon" );
-        set_msg_block( g_msgidRoundTime, BLOCK_SET );
-    }
-    else {
-        unregister_message( g_msgidHideWeapon, g_hmsgHideWeapon );
-        set_msg_block( g_msgidRoundTime, BLOCK_NOT );
-    }
-    
-    return;
-}
-
-// set infinite buy time in warmup time
-public fwdSetInfiniteBuyTime( const szcvar[] )
-{
-    if( equal( szcvar, "mp_buytime" ) ) {
-        forward_return( FMV_FLOAT, 99999.0 );
-        return FMRES_SUPERCEDE;
-    }
-    
-    return FMRES_IGNORED;
-}
-
-// (un)restrict grenades in warmup time
-SetAllowGrens( bool: bifon )
-{
-    if( bifon ) {
-        server_cmd( "amx_restrict off flash" );
-        server_cmd( "amx_restrict off hegren" );
-        server_cmd( "amx_restrict off sgren" );
-        unregister_forward( FM_CVarGetFloat, g_hfwdGetCvarFloat, false );
-        unregister_forward( FM_SetModel, g_hfwdSetModel, false );
-        // disable Spawn Ham Forward
-        DisableHamForward( g_hamSpawnPost );
-        DisableHamForward( g_hamDeathFwd );
-        DisableHamForward( g_hamTouch[0] );
-        DisableHamForward( g_hamTouch[1] );
-        DisableHamForward( g_hamTouch[2] );
-        // disable WeapPickup message
-        unregister_message( g_msgidWeapPickup, g_hmsgWeapPickup );
-    }
-    else {
-        server_cmd( "amx_restrict on flash" );
-        server_cmd( "amx_restrict on hegren" );
-        server_cmd( "amx_restrict on sgren" );
-        g_hfwdGetCvarFloat = register_forward( FM_CVarGetFloat, "fwdSetInfiniteBuyTime", false );
-        g_hfwdSetModel = register_forward( FM_SetModel, "fwdSetModel", false );
-        // enabel ham forward spawn
-        EnableHamForward( g_hamSpawnPost );
-        EnableHamForward( g_hamDeathFwd );
-        EnableHamForward( g_hamTouch[0] );
-        EnableHamForward( g_hamTouch[1] );
-        EnableHamForward( g_hamTouch[2] );
-        // register WeapPickup message
-        g_hmsgWeapPickup = register_message( g_msgidWeapPickup, "HookMsgWeapPickup" );
-    }
-    
-    return;
-}
-
-public msgHideWeapon()
-{
-    set_msg_arg_int( 1, ARG_BYTE, get_msg_arg_int( 1 ) | HW_HIDE_TIMER_FLAG );
-    
-    return;
-}
-
 public eventResetHUD( id )
 {
-    if( g_StatusNow != STATUS_WARM )
+    if( StatMatch() )
         ShowHUDScore();
     else {        
         message_begin( MSG_ONE, g_msgidHideWeapon, _, id );
@@ -1097,12 +1519,27 @@ public eventResetHUD( id )
     return;
 }
 
-// Enter specific section functions ============================================
-//
-//
+//==============================================================================
+//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
+//  ©¦  REGULAR MATCH RELATED FUNCTIONS  ©¦
+//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
+//      ¡ú EnterWarm
+//          ©À SetMapObjective
+//          ©À SetBlockRoundTimer
+//          ©¸ SetAllowGrens
+//      ¡ú StopWarm
+//          ©À SetMapObjective
+//          ©À SetBlockRoundTimer
+//          ©¸ SetAllowGrens
 //==============================================================================
 
-// function to load default status of the plugin
+/*
+    This function lets the plugin enter warmup status and set proper tasks for
+    warmup time
+    
+    @param  none
+    @return none
+*/
 public EnterWarm()
 {
     // block map objective
@@ -1130,8 +1567,13 @@ public EnterWarm()
     return;
 }
 
-//------------------------------------------------
-
+/*
+    This function lets the plugin stop warmup status and set proper tasks for
+    match. This is usually called when preparing for match status.
+    
+    @param  none
+    @return none
+*/
 StopWarm()
 {
     // recover map objective
@@ -1185,7 +1627,7 @@ public EnterKnifeRound()
 {
     g_StatusNow = STATUS_KNIFE1;
     
-    g_ScoreT1 = g_ScoreCT1 = g_ScoreT2 = g_ScoreCT2 = 0;
+    g_Score[0][0] = g_Score[0][1] = g_Score[1][0] = g_Score[1][1] = 0;
     ServerSay( "%L", LANG_SERVER, "PUG_KNIFEROUND_MSG" );
     server_cmd( "sv_restartround 3" );
     set_task( 5.0, "KnifeRoundMsg" );
@@ -1272,7 +1714,7 @@ public EnterFirstHalf()
 {
     g_StatusNow = STATUS_F_HALF;
     
-    g_ScoreT1 = g_ScoreCT1 = g_ScoreT2 = g_ScoreCT2 = 0;
+    g_Score[0][0] = g_Score[0][1] = g_Score[1][0] = g_Score[1][1] = 0;
     ServerSay( "%L", LANG_SERVER, "PUG_FHSTART_MSG" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_FHSTART_MSG" );
@@ -1286,17 +1728,18 @@ public EnterFirstHalf()
 
 EnterIntermission()
 {
-    ServerSay( "%L", LANG_SERVER, "PUG_FHEND_MSG" , g_ScoreT1, g_ScoreCT1 );
+    ServerSay( "%L", LANG_SERVER, "PUG_FHEND_MSG" , g_Score[0][0], g_Score[1][0] );
     ServerSay( "%L", LANG_SERVER, "PUG_DONTCHANGETEAM" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 3.0, 0.1, 0.1 );
-    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_FHEND_HUD", g_ScoreT1, g_ScoreCT1 );
+    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_FHEND_HUD", g_Score[0][0], g_Score[1][0] );
     set_task( 2.0, "SwapTeam" );
     
     switch( get_pcvar_num( g_pcIntermission ) ) {
         case 0: set_task( 3.0, "EnterSecondHalf" );
         case 1: {
             InitPlayerInfo();
-            set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, _, _, "b" );
+            if( !task_exists( TASKID_SHOWREADY, 0 ) )
+                set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, _, _, "b" );
             g_StatusNow = STATUS_INTER;
         }
     }
@@ -1308,7 +1751,7 @@ EnterIntermission()
 
 public EnterSecondHalf()
 {
-    g_ScoreT2 = g_ScoreCT2 = 0;
+    g_Score[0][1] = g_Score[1][1] = 0;
     g_StatusNow = STATUS_S_HALF;
     ServerSay( "%L", LANG_SERVER, "PUG_SHSTART_MSG" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
@@ -1333,8 +1776,8 @@ MatchWin( CsTeams: team )
         case CS_TEAM_CT: formatex( teamname, 15, "%L", LANG_SERVER, "PUG_CTNAME" );
     }
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
-    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHEND_HUD", g_ScoreT1 + g_ScoreT2, g_ScoreCT1 + g_ScoreCT2, teamname );
-    ServerSay( "%L", LANG_SERVER, "PUG_MATCHEND_MSG", g_ScoreT1 + g_ScoreT2, g_ScoreCT1 + g_ScoreCT2 );
+    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHEND_HUD", g_Score[0][0] + g_Score[0][1], g_Score[1][0] + g_Score[1][1], teamname );
+    ServerSay( "%L", LANG_SERVER, "PUG_MATCHEND_MSG", g_Score[0][0] + g_Score[0][1], g_Score[1][0] + g_Score[1][1] );
     
     set_task( 5.0, "EnterWarm" );
     
@@ -1358,25 +1801,18 @@ MatchDraw()
 
 UpdateScore( status, CsTeams: team, score )
 {
+    new tid = _:( team ) - 1;
+    
     switch( status ) {
         case STATUS_F_HALF: {
-            switch( team ) {
-                case CS_TEAM_T: g_ScoreT1 += ( score - g_scorebuff[0] > 0 ) ? 1 : 0;
-                case CS_TEAM_CT: g_ScoreCT1 += ( score - g_scorebuff[1] > 0 ) ? 1 : 0;
-            }
-            if( g_ScoreT1 + g_ScoreCT1 == 15 ) EnterIntermission();
+            g_Score[tid][0] += ( score - g_scorebuff[tid] > 0 ) ? 1 : 0;
+            if( g_Score[0][0] + g_Score[1][0] == 15 ) EnterIntermission();
         }
         case STATUS_S_HALF: {
-            switch( team ) {
-                case CS_TEAM_T: g_ScoreT2 += ( score - g_scorebuff[0] > 0 ) ? 1 : 0;
-                case CS_TEAM_CT: g_ScoreCT2 += ( score - g_scorebuff[1] > 0 ) ? 1 : 0;
-            }
-            if( g_ScoreCT1 + g_ScoreCT2 == 16 ) 
-                MatchWin( CS_TEAM_CT );
-            else if( g_ScoreT1 + g_ScoreT2 == 16 )
-                MatchWin( CS_TEAM_T );
-                
-            if( g_ScoreT1 + g_ScoreT2 + g_ScoreCT1 + g_ScoreCT2 == 30 ) MatchDraw();
+            g_Score[tid][1] += ( score - g_scorebuff[tid] > 0 ) ? 1 : 0;
+            if( g_Score[tid][0] + g_Score[tid][1] == 16 ) MatchWin( team );                
+            if( g_Score[0][0] + g_Score[0][1] == 15 && g_Score[1][0] + g_Score[1][1] == 15 ) 
+                MatchDraw();
         }
     }
     g_scorebuff[_:( team ) - 1] = score;
@@ -1418,12 +1854,12 @@ public MsgTeamScore()
     
     get_msg_arg_string( 1, teamname, 15 );
     if( g_StatusNow == STATUS_S_HALF ) {
-        buff[0] = g_ScoreT2;
-        buff[1] = g_ScoreCT2;
+        buff[0] = g_Score[0][1];
+        buff[1] = g_Score[1][1];
     }
     else {
-        buff[0] = g_ScoreT1;
-        buff[1] = g_ScoreCT1;
+        buff[0] = g_Score[0][0];
+        buff[1] = g_Score[1][0];
     }
     tindex = _:( teamname[0] == 'C' );
     set_msg_arg_int( 2, ARG_SHORT, buff[tindex] );
@@ -1446,60 +1882,12 @@ public eventNewRoundStart()
 UpdateRoundNum()
 {
     switch( g_StatusNow ) {
-        case STATUS_F_HALF: g_RoundNum = g_ScoreT1 + g_ScoreT2 + g_ScoreCT1 + g_ScoreCT2 + 1;
-        case STATUS_S_HALF: g_RoundNum = g_ScoreT1 + g_ScoreT2 + g_ScoreCT1 + g_ScoreCT2 + 1;
-        case STATUS_INTER: g_RoundNum = g_ScoreT1 + g_ScoreT2 + g_ScoreCT1 + g_ScoreCT2;
-        default: g_RoundNum = 0;
-    }
-    
-    return;
-}
-
-SetShowMoneyTask()
-{
-    if( StatLive() && get_pcvar_num( g_pcShowMoney ) == 1 ) 
-        set_task( 0.1, "ShowTeamMoney" );
-        
-    return;
-}
-
-public ShowTeamMoney()
-{
-    static Playerid[32], CsTeams: team[32], MsgT[256], MsgCT[256], lenT, lenCT;
-    new i, money, PlayerNum, id;
-    new Float: holdtime;
-    
-    get_players( Playerid, PlayerNum, "h", "" );
-    lenT = formatex( MsgT, 255, "%L :^n^n", LANG_SERVER, "TELL_MONEY_TITLE_T" );
-    lenCT = formatex( MsgCT, 255, "%L £º^n^n", LANG_SERVER, "TELL_MONEY_TITLE_CT" );
-    for( i = 0; i < PlayerNum; i++ ) {
-        id = Playerid[i];
-        team[i] = g_teamHash[id];
-        switch( team[i] ) {
-            case CS_TEAM_CT: {
-                money = cs_get_user_money( id );
-                lenCT += formatex( MsgCT[lenCT], 255 - lenCT, "%s    ( %d )^n", g_name[id], money );
-            }
-            case CS_TEAM_T: {
-                money = cs_get_user_money( id );
-                lenT += formatex( MsgT[lenT], 255 - lenT, "%s    ( %d )^n", g_name[id], money );
-            }
-        }
-    }
-    
-    holdtime = get_cvar_float( "mp_freezetime" ) - 1.0;
-    for( i = 0; i < PlayerNum; i++ ) {
-        id = Playerid[i];
-        switch( team[i] ) {
-            case CS_TEAM_CT: {
-                set_hudmessage( 0x00, 0x00, 0xff, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, CH_SHOWMONEY );
-                show_hudmessage( id, MsgCT );
-            }
-            case CS_TEAM_T:{
-                set_hudmessage( 0xff, 0x00, 0x00, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, CH_SHOWMONEY );
-                show_hudmessage( id, MsgT );
-            }
-        }
+        case STATUS_F_HALF, STATUS_S_HALF: 
+            g_RoundNum = g_Score[0][0] + g_Score[0][1] + g_Score[1][0] + g_Score[1][1] + 1;
+        case STATUS_INTER: 
+            g_RoundNum = g_Score[0][0] + g_Score[0][1] + g_Score[1][0] + g_Score[1][1];
+        default: 
+            g_RoundNum = 0;
     }
     
     return;
@@ -2454,7 +2842,6 @@ public plugin_cfg()
 {
     g_HudPlRdyPosFlag[0] = 2;
     set_task( 1.0, "CheckHostName" );
-    //set_task( 60.0, "CheckHostName", _, _, _, "b" );
     
     readMap();
     
@@ -2499,11 +2886,11 @@ public plugin_init()
     register_event( "ResetHUD", "eventResetHUD", "b" );
     register_event( "TeamInfo", "eventTeamInfo", "a" );
     
-    g_hamSpawnPost = RegisterHam( Ham_Spawn, "player", "HookPlayerSpawnPost", 1 );
-    g_hamDeathFwd = RegisterHam( Ham_Killed, "player", "HookDeathFwd", 0 );
-    g_hamTouch[0] = RegisterHam( Ham_Touch, "armoury_entity", "HookWeaponPickupPost", 1 );
-    g_hamTouch[1] = RegisterHam( Ham_Touch, "weaponbox", "HookWeaponPickupPost", 1 );
-    g_hamTouch[2] = RegisterHam( Ham_Touch, "weapon_shield", "HookWeaponPickupPost", 1 );
+    g_hamPostSpawn = RegisterHam( Ham_Spawn, "player", "hamPostPlayerSpawn", 1 );
+    g_hamFwdDeath = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 );
+    g_hamPostTouch[0] = RegisterHam( Ham_Touch, "armoury_entity", "hamPostWeaponTouch", 1 );
+    g_hamPostTouch[1] = RegisterHam( Ham_Touch, "weaponbox", "hamPostWeaponTouch", 1 );
+    g_hamPostTouch[2] = RegisterHam( Ham_Touch, "weapon_shield", "hamPostWeaponTouch", 1 );
     
     g_msgidTeamScore = get_user_msgid( "TeamScore" );
     g_msgidHideWeapon = get_user_msgid( "HideWeapon" );
