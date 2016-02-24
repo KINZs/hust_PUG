@@ -83,7 +83,7 @@
 
 
 new const PLUGIN_NAME[]     =   "HUST PUG";
-new const PLUGIN_VERSION[]  =   "1.4a2";
+new const PLUGIN_VERSION[]  =   "1.3";
 new const PLUGIN_AUTHOR[]   =   "real";
 
 // need flag "b" to control the plugin
@@ -131,7 +131,8 @@ new g_HudPlRdyPosFlag[10];      // array to record available HUD display positio
 // consts about PUG status
 enum {
     STATUS_WARM = 1,
-    STATUS_KNIFE,
+    STATUS_KNIFE1,
+    STATUS_KNIFE2,
     STATUS_F_HALF,
     STATUS_INTER,
     STATUS_S_HALF
@@ -231,11 +232,8 @@ new     g_pcKnifeRound;         // hp_kniferound
 new     g_pcTeamLimit;          // hp_teamlimit
 new     g_pcShowMoney;          // hp_showmoney
 new     g_pcIntermission;       // hp_intermission
-new     g_pcMaxRound;           // hp_maxround
-new     g_pcWarmCfg, g_pcMatchCfg; // hp_warmcfg, hp_matchcfg
 new     g_pcAmxShowAct;         // amx_show_activity
 new     g_pcHostName;           // hostname
-new     g_pcFreezeTime;         // mp_freezetime
 
 // vars to save swap requests and choices
 new     g_SwapRequest[MAX_PLAYERS + 1];             // player requesting states
@@ -247,12 +245,10 @@ new     g_msgidTeamScore;       // message id for "TeamScore" Msg
 new     g_msgidHideWeapon;      // message id for "HideWeapon" Msg
 new     g_msgidRoundTime;       // message id for "RoundTime" Msg
 new     g_msgidWeapPickup;      // message id for "WeapPickup" Msg
-new     g_msgidCurWeapon;       // message id for "CurWeapon" Msg
 
 // some message handles
 new     g_hmsgHideWeapon;       // handle for registered message "HideWeapon"
 new     g_hmsgWeapPickup;       // handle for registered message "WeapPickup"
-new     g_hmsgCurWeapon;        // handle for registered message "CurWeapon"
 
 // some ham forward handles
 new     HamHook: g_hamPostSpawn;        // handle of HookPlayerSpawnPost
@@ -293,8 +289,8 @@ new     g_hostname[32];                 // hostname of server
 //      ¡ú ShowNotification
 //      ¡ú ShowHUDScore
 //      ¡ú readMap
-//      ¡ú ShowTeamMoney
-//      ¡ú eventResetHUD
+//      ¡ú SetShowMoneyTask
+//          ©¸ ShowTeamMoney ¡û
 //==============================================================================
 
 /*
@@ -306,7 +302,6 @@ new     g_hostname[32];                 // hostname of server
 public CheckHostName()
 {
     get_pcvar_string( g_pcHostName, g_hostname, 31 );
-    formatex( g_name[0], 31, "%s", g_hostname );
     
     return;
 }
@@ -465,7 +460,8 @@ public ShowHUDScore()
     new tt = g_RoundNum;
     
     switch( g_StatusNow ) {
-        case STATUS_KNIFE: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_KNIFEROUND" );
+        case STATUS_KNIFE1: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_KNIFEROUND" );
+        case STATUS_KNIFE2: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_KNIFEROUND" );
         case STATUS_F_HALF: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_F_HALF" );
         case STATUS_S_HALF: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_S_HALF" );
         case STATUS_INTER: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_INTER" );    
@@ -530,6 +526,13 @@ readMap()
     @param  none
     @return none
 */
+SetShowMoneyTask()
+{
+    if( StatLive() && get_pcvar_num( g_pcShowMoney ) == 1 ) 
+        set_task( 0.1, "ShowTeamMoney" );
+        
+    return;
+}
 public ShowTeamMoney()
 {
     static Playerid[32], CsTeams: team[32], MsgT[256], MsgCT[256], lenT, lenCT;
@@ -554,7 +557,7 @@ public ShowTeamMoney()
         }
     }
     
-    holdtime = get_pcvar_float( g_pcFreezeTime ) - 1.0;
+    holdtime = get_cvar_float( "mp_freezetime" ) - 1.0;
     for( i = 0; i < PlayerNum; i++ ) {
         id = Playerid[i];
         switch( team[i] ) {
@@ -572,28 +575,6 @@ public ShowTeamMoney()
     return;
 }
 
-/*
-    This function hooks the event "ResetHUD" and its behavior depends on the
-    match status.
-    
-    @param  id      :   index of player
-    @return none
-*/
-public eventResetHUD( id )
-{
-    if( StatMatch() )
-        ShowHUDScore();
-    else {        
-        message_begin( MSG_ONE, g_msgidHideWeapon, _, id );
-        {
-            write_byte( HW_HIDE_TIMER_FLAG );
-        }
-        message_end();
-    }
-
-    return;
-}
-
 //==============================================================================
 //  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
 //  ©¦  GENERIC USEFUL FUNCTIONS  ©¦
@@ -607,11 +588,11 @@ public eventResetHUD( id )
 //      ¡ú RefreshReadyList
 //          ©¸ PutPlayer ¡û
 //      ¡ú StripWeapon
+//      ¡ú client_infochanged
 //      ¡ú SetAllowGrens
 //          ©À {*fwdSetInfiniteBuyTime*}
 //          ©À {*fwdSetModel*}
-//          ©À {*msgWeapPickup*}
-//          ©¸ {*msgHideWeapon*}
+//          ©¸ {*msgWeapPickup*}
 //==============================================================================
 
 /*
@@ -834,6 +815,25 @@ StripWeapon( id, wid )
 }
 
 /*
+    This is a default forward function that called when player's info has been
+    changed. Here it is used to fix display bug of readylist when player changes
+    their names.
+    
+    @param  id      :   index of player whose info has been changed
+    @return none
+*/
+public client_infochanged( id )
+{
+    static name[32];
+    
+    get_user_info( id, "name", name, 31 );
+    if( !equal( name, g_name[id] ) ) 
+        formatex( g_name[id], 31, "%s", name );
+    
+    return PLUGIN_CONTINUE;
+}
+
+/*
     This is function enable/disables most forwards used in warmup time.
     This is a very important function.
     
@@ -857,7 +857,6 @@ SetAllowGrens( bool: bifon )
         DisableHamForward( g_hamPostTouch[2] );
         // disable WeapPickup message
         unregister_message( g_msgidWeapPickup, g_hmsgWeapPickup );
-        unregister_message( g_msgidCurWeapon, g_hmsgCurWeapon );
     }
     else {
         server_cmd( "amx_restrict on flash" );
@@ -871,9 +870,8 @@ SetAllowGrens( bool: bifon )
         EnableHamForward( g_hamPostTouch[0] );
         EnableHamForward( g_hamPostTouch[1] );
         EnableHamForward( g_hamPostTouch[2] );
-        // register some messages
+        // register WeapPickup message
         g_hmsgWeapPickup = register_message( g_msgidWeapPickup, "msgWeapPickup" );
-        g_hmsgCurWeapon = register_message( g_msgidCurWeapon, "msgCurWeapon" );
     }
     
     return;
@@ -888,10 +886,9 @@ SetAllowGrens( bool: bifon )
 //      ¡ú hamFwdPlayerDeath
 //          ©¸ DelayRespawn ¡û
 //      ¡ú hamPostPlayerSpawn
-//          ©À RemoveProtect ¡û
-//          ©¸ StripWeapon
+//          ©À DelaySetWeaponStat ¡û
+//          ©¸ RemoveProtect ¡û
 //      ¡ú msgWeapPickup
-//      ¡ú msgCurWeapon
 //      ¡ú fwdSetModel
 //          ©¸ DelayRemoveEnt ¡û
 //      ¡ú hamPostWeaponTouch
@@ -944,6 +941,33 @@ public DelayRespawn( tskid )
     if( team != CS_TEAM_T && team != CS_TEAM_CT ) return;
     
     ExecuteHamB( Ham_CS_RoundRespawn, id );
+    
+    return;
+}
+
+/*
+    This function sets the weapon status after player re-acquire their weapons
+    in warmup time. Status of weapon include "silencer" and "burst mode". It is 
+    usually called with a small amount of delay time to ensure the correctness
+    of the result.
+    
+    @param  para[0]     :   index of player who is holding the weapon
+    @param  para[1]     :   index of weapon that needs to be set status
+    @param  para[2]     :   weapon status, see hamFwdPlayerDeath() function
+    @return none
+*/
+public DelaySetWeaponStat( const para[] )
+{
+    new id = para[0];
+    new wid = para[1];
+    new silen = _:( ( para[2] & 2 ) != 0 );
+    new burst = _:( ( para[2] & 1 ) != 0 );
+    static wEnt;
+    
+    wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
+
+    cs_set_weapon_silen( wEnt, silen, 0 );
+    cs_set_weapon_burst( wEnt, burst );
     
     return;
 }
@@ -1017,7 +1041,7 @@ public hamPostPlayerSpawn( id )
 {
     if( !is_user_alive( id ) ) return HAM_IGNORED;
     
-    static CsTeams: team, buff, wid, stat, wEnt;
+    static CsTeams: team, buff, para[3], wid, stat;
     
     cs_set_user_money( id, 16000 );
     set_user_godmode( id, 1 );
@@ -1043,9 +1067,10 @@ public hamPostPlayerSpawn( id )
                 }
         }
         if( ( wid == CSW_GLOCK18 || wid == CSW_USP ) && ( stat != 0 ) ) {
-            wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
-            cs_set_weapon_silen( wEnt, ( stat & 2 ) != 0 ? 1 : 0, 0 );
-            cs_set_weapon_burst( wEnt, ( stat & 1 ) != 0 ? 1 : 0 );
+            para[0] = id;
+            para[1] = wid;
+            para[2] = stat;
+            set_task( 0.1, "DelaySetWeaponStat", _, para, 3 );
         }
     }
     if( ( buff = g_WarmWeapon[id][0] ) != 0 ) {
@@ -1053,9 +1078,10 @@ public hamPostPlayerSpawn( id )
         stat = ( buff & 3 );
         give_item( id, WEAPON_NAME[wid] );
         if( ( wid == CSW_M4A1 || wid == CSW_FAMAS ) && ( stat != 0 ) ) {
-            wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
-            cs_set_weapon_silen( wEnt, ( stat & 2 ) != 0 ? 1 : 0, 0 );
-            cs_set_weapon_burst( wEnt, ( stat & 1 ) != 0 ? 1 : 0 );
+            para[0] = id;
+            para[1] = wid;
+            para[2] = stat;
+            set_task( 0.1, "DelaySetWeaponStat", _, para, 3 );
         }
     }
     g_WarmWeapon[id][0] = g_WarmWeapon[id][1] = 0;
@@ -1105,27 +1131,6 @@ public msgWeapPickup( msgid, idest, id )
 
     if( ( ( 1 << msgwid ) & CSW_SECONDARY ) != 0 && wid != msgwid )  
         return PLUGIN_HANDLED;
-    
-    return PLUGIN_CONTINUE;
-}
-
-/*
-    This function hooks the message "CurWeapon" to give infinite back pack
-    ammo to player when warmup time.
-    
-    g_msgidCurWeapon = get_user_msgid( "CurWeapon" )
-    g_hmsgCurWeapon = register_message( g_msgidCurWeapon, "msgCurWeapon" )
-    
-    @param  id          :   index of player
-    @return none
-*/
-public msgCurWeapon( msgid, idest, id )
-{
-    if( !is_user_alive( id ) || get_msg_arg_int( 1 ) == 0 ) return PLUGIN_CONTINUE;
-
-    new wpid = get_msg_arg_int( 2 );
-    if( WEAPON_MAXAMMO[wpid] > 2 )
-        cs_set_user_bpammo( id, wpid, WEAPON_MAXAMMO[wpid] );
     
     return PLUGIN_CONTINUE;
 }
@@ -1290,6 +1295,9 @@ public fwdSetInfiniteBuyTime( const szcvar[] )
 //              ©¸ EnterSecondHalf
 //      ¡ú PlayerUNReady
 //          ©¸ findHUDPos
+//      ¡ú PlayerJoin
+//          ©À ShowSwapMenu
+//          ©¸ RefreshReadyList
 //==============================================================================
 
 /*
@@ -1411,55 +1419,119 @@ AutoStart( bool: force, ifKnife )
     return;
 }
 
-//==============================================================================
-//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
-//  ©¦  REGULAR MATCH RELATED FUNCTIONS  ©¦
-//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
-//      ¡ú eventCurWeapon
-//      ¡ú StopWarm
-//          ©À SetMapObjective
-//          ©À SetBlockRoundTimer
-//          ©¸ SetAllowGrens
-//      ¡ú EnterKnifeRound
-//          ©¸ KnifeRoundMsg ¡û
-//      ¡ú EnterFirstHalf
-//          ©¸ R3Function ¡û
-//              ©¸ ScrollServerSay ¡û
-//      ¡ú eventTeamScore
-//          ©À UpdateScore ¡û
-//          ©¦   ©À EnterIntermission ¡û
-//          ©¦   ©¦   ©À SwapTeam
-//          ©¦   ©¦   ©À EnterSecondHalf ¡û
-//          ©¦   ©¦   ©¦   ©¸ R3Function ¡û
-//          ©¦   ©¦   ©¸ ShowReadyList
-//          ©¦   ©À MatchWin ¡û
-//          ©¦   ©¦   ©¸ EnterWarm ¡û
-//          ©¦   ©¦       ©À SetMapObjective
-//          ©¦   ©¦       ©À SetBlockRoundTimer
-//          ©¦   ©¦       ©¸ SetAllowGrens
-//          ©¦   ©¸ MatchDraw ¡û
-//          ©¦       ©¸ EnterWarm ¡û
-//          ©¸ KnifeRoundWon ¡û
-//              ©¸ ShowPickTeamMenu
-//      ¡ú msgTeamScore
-//==============================================================================
-
 /*
-    This function hooks "CurWeapon" event to force players to use knife in knife
-    round.
-    
-    register_event( "CurWeapon", "eventCurWeapon", "be", "1=0", "2=29" )
+    This function is used for take the place of default client command "jointeam".
+    This function will check the team status before put player in corresponding
+    team.
     
     @param  id      :   index of player
     @return none
 */
-public eventCurWeapon( id )
+public PlayerJoin( id )
 {
-    if( g_StatusNow == STATUS_KNIFE )
-        engclient_cmd( id, "weapon_knife" );
-
-    return PLUGIN_CONTINUE;
+    static args[16], argn;
+    new tl = get_pcvar_num( g_pcTeamLimit );
+    
+    if( StatLive() ) {
+        new CsTeams: team = cs_get_user_team( id );
+        switch( team ) {
+            case CS_TEAM_T: {
+                client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU" );
+                set_task( 5.0, "ShowSwapMenu", id + OFFSET_MENU );
+            }
+            case CS_TEAM_CT: {
+                client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU" );
+                set_task( 5.0, "ShowSwapMenu", id + OFFSET_MENU );
+            }
+            default:
+                client_print( id, print_center, "%L", LANG_SERVER, "PUG_CANTTEAMSELECT" );
+        }
+        return PLUGIN_HANDLED;
+    }
+    
+    read_argv( 1, args, 15 );
+    argn = str_to_num( args );
+    
+    if( argn != 1 && argn != 2 && argn != 5 && argn != 6 ) return PLUGIN_HANDLED;
+    
+    switch( argn ) {
+        case 1:
+            if( g_Tnum >= 5 && tl == 1 ) {
+                client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_CANTJOINT" );
+                client_cmd( id, "chooseteam" );
+                return PLUGIN_HANDLED;
+            }
+            else
+                engclient_cmd( id, "jointeam", "1" );
+        case 2:
+            if( g_Cnum >= 5 && tl == 1 ) {
+                client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_CANTJOINCT" );
+                client_cmd( id, "chooseteam" );
+                return PLUGIN_HANDLED;
+            }
+            else
+                engclient_cmd( id, "jointeam", "2" );
+        case 6: {
+            engclient_cmd( id, "jointeam", "6" );
+            return PLUGIN_HANDLED;
+        }
+    }
+    set_task( 0.1, "RefreshReadyList" );
+    
+    return PLUGIN_HANDLED;
 }
+
+// Update info list when someone drops
+public client_disconnect( id )
+{
+    new CsTeams: team = g_teamHash[id];
+    
+    g_teamHash[id] = CS_TEAM_UNASSIGNED;
+    if( g_ready[id] ) {
+        g_ready[id] = false;
+        g_rdy--;
+    }
+    switch( team ) {
+        case CS_TEAM_T: g_Tnum--;
+        case CS_TEAM_CT: g_Cnum--;
+    }
+    
+    return PLUGIN_HANDLED;
+}
+
+
+
+// Warmup time game related ====================================================
+// Block objective map, respawning, etc.
+//
+//==============================================================================
+
+public eventResetHUD( id )
+{
+    if( StatMatch() )
+        ShowHUDScore();
+    else {        
+        message_begin( MSG_ONE, g_msgidHideWeapon, _, id );
+        write_byte( HW_HIDE_TIMER_FLAG );
+        message_end();
+    }
+
+    return;
+}
+
+//==============================================================================
+//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
+//  ©¦  REGULAR MATCH RELATED FUNCTIONS  ©¦
+//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
+//      ¡ú EnterWarm
+//          ©À SetMapObjective
+//          ©À SetBlockRoundTimer
+//          ©¸ SetAllowGrens
+//      ¡ú StopWarm
+//          ©À SetMapObjective
+//          ©À SetBlockRoundTimer
+//          ©¸ SetAllowGrens
+//==============================================================================
 
 /*
     This function lets the plugin enter warmup status and set proper tasks for
@@ -1522,15 +1594,38 @@ StopWarm()
     return;
 }
 
-/*
-    This function lets the match enters kniferound. 
+//------------------------------------------------
+
+public eventCurWeapon( id )
+{
+    static wpid;
     
-    @param  none
-    @return none
-*/
+    switch( g_StatusNow ) {
+        case STATUS_KNIFE1, STATUS_KNIFE2: {
+            wpid = read_data( 2 );
+    
+            if( wpid != CSW_KNIFE ) 
+                engclient_cmd( id, "weapon_knife" );
+    
+            return PLUGIN_HANDLED;
+        }
+        case STATUS_WARM: {
+            if( !is_user_alive( id ) ) return PLUGIN_CONTINUE;
+            
+            wpid = read_data( 2 );
+            if( WEAPON_MAXAMMO[wpid] > 2 )
+                cs_set_user_bpammo( id, wpid, WEAPON_MAXAMMO[wpid] );
+        }
+    }
+
+    return PLUGIN_CONTINUE;
+}
+
+//------------------------------------------------
+
 public EnterKnifeRound()
 {
-    g_StatusNow = STATUS_KNIFE;
+    g_StatusNow = STATUS_KNIFE1;
     
     g_Score[0][0] = g_Score[0][1] = g_Score[1][0] = g_Score[1][1] = 0;
     ServerSay( "%L", LANG_SERVER, "PUG_KNIFEROUND_MSG" );
@@ -1540,40 +1635,20 @@ public EnterKnifeRound()
     return;
 }
 
-/*
-    This function shows the kniferound prompt message. 
-    This message uses director HUD message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FF0000 (red)
-    
-    @param  none
-    @return none
-*/
+//------------------------------------------------
+
 public KnifeRoundMsg()
 {
     for( new i = 0; i < 4; i++ ) ServerSay( "%L", LANG_SERVER, "PUG_KNIFEROUND_STR" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_KNIFEROUND_HUD" );
+    g_StatusNow = STATUS_KNIFE2;
     
     return;
 }
 
-/*
-    This function is called when a team has won the kniferound and show them
-    the team pick up menu to let them choose the team.
-    This function uses the Director HUD message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FFFFFF (white)
-    
-    @param  team        :   team id of the winner's team
-    @return none
-*/
+//------------------------------------------------
+
 KnifeRoundWon( CsTeams: team )
 {
     static teamname[16];
@@ -1584,24 +1659,14 @@ KnifeRoundWon( CsTeams: team )
         formatex( teamname, 15, "%L", LANG_SERVER, "PUG_CTNAME" );
     set_dhudmessage( 0xff, 0xff, 0xff, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_KNIFEWON_MSG", teamname );
-
-    MenuShowPickTeam( team );
+    
+    ShowPickTeamMenu( team );
     
     return;
 }
 
-/*
-    This function is called to process with Restart-3 procedure. 
-    This function uses the Director HUD message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FF0000 (red)
-    
-    @param  tskid       :   t = tskid - OFFSET_R3 is the refresh interval
-    @return none
-*/
+//------------------------------------------------
+
 public R3Function( tskid )
 {
     const R3_SCROLL_WID = 25;
@@ -1624,12 +1689,8 @@ public R3Function( tskid )
     return;
 }
 
-/*
-    This function is called to produce a scrolled LIVE message in chat section.
-    
-    @param  tskid       :   width = tskid - OFFSET_SCROLL is the scrolling width of message
-    @return none
-*/
+//------------------------------------------------
+
 public ScrollServerSay( tskid )
 {
     new i, width = tskid - OFFSET_SCROLL;
@@ -1647,18 +1708,8 @@ public ScrollServerSay( tskid )
     return;
 }
 
-/*
-    This function lets the match enters First Half.
-    This function uses the Director HUD message to show prompt message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FF0000 (red)
-    
-    @param  none
-    @return none
-*/
+//------------------------------------------------
+
 public EnterFirstHalf()
 {
     g_StatusNow = STATUS_F_HALF;
@@ -1673,21 +1724,8 @@ public EnterFirstHalf()
     return;
 }
 
-/*
-    This function lets the match enters Intermission. If the CVAR "hp_intermission"
-    is "1" then function will reactivate autostart procedures, otherwise it will
-    make the match enters Second Half directly. The function will also swap team
-    automatically.
-    This function uses the Director HUD message to show prompt message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FF0000 (red)
-    
-    @param  none
-    @return none
-*/
+//------------------------------------------------
+
 EnterIntermission()
 {
     ServerSay( "%L", LANG_SERVER, "PUG_FHEND_MSG" , g_Score[0][0], g_Score[1][0] );
@@ -1709,18 +1747,8 @@ EnterIntermission()
     return;
 }
 
-/*
-    This function lets the match enters Second Half.
-    This function uses the Director HUD message to show prompt message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FF0000 (red)
-    
-    @param  none
-    @return none
-*/
+//------------------------------------------------
+
 public EnterSecondHalf()
 {
     g_Score[0][1] = g_Score[1][1] = 0;
@@ -1734,18 +1762,11 @@ public EnterSecondHalf()
     return;
 }
 
-/*
-    This function will be called when 1 team has won maxround+1 rounds.
-    This function uses the Director HUD message to show prompt message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FF0000 (red)
-    
-    @param  team        :   team ID of winner's team
-    @return none
-*/
+// Match Result related=========================================================
+//
+//
+//==============================================================================
+
 MatchWin( CsTeams: team )
 {
     static teamname[16];
@@ -1763,18 +1784,8 @@ MatchWin( CsTeams: team )
     return;
 }
 
-/*
-    This function will be called when both team has won maxround rounds.
-    This function uses the Director HUD message to show prompt message.
-    
-    HUD params:
-        ©À CHANNEL:    DIRECTOR HUD
-        ©À POSITION:   HUD_POS_MATCHNOT[]
-        ©¸ COLOR:      #FF0000 (red)
-    
-    @param  none
-    @return none
-*/
+//------------------------------------------------
+
 MatchDraw()
 {
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
@@ -1786,52 +1797,36 @@ MatchDraw()
     return;
 }
 
-/*
-    This function updates the score for both teams and is called under the event
-    "TeamScore". After updated the score, it will also judge if the current half
-    fulfills the end condition.
-    
-    @param  team        :   team ID of scored team
-    @param  score       :   score of corresponding team
-    @return none
-*/
-UpdateScore( CsTeams: team, score )
+//------------------------------------------------
+
+UpdateScore( status, CsTeams: team, score )
 {
     new tid = _:( team ) - 1;
     
-    switch( g_StatusNow ) {
-        case STATUS_F_HALF:
-            if( score > g_scorebuff[tid] ) {
-                g_Score[tid][0]++;
-                if( g_Score[0][0] + g_Score[1][0] == 15 ) EnterIntermission();
-            }
-        case STATUS_S_HALF:
-            if( score > g_scorebuff[tid] ) {
-                g_Score[tid][1]++;
-                if( g_Score[tid][0] + g_Score[tid][1] == 16 ) MatchWin( team );                
-                if( g_Score[0][0] + g_Score[0][1] == 15 && g_Score[1][0] + g_Score[1][1] == 15 ) 
-                    MatchDraw();
-            }
+    switch( status ) {
+        case STATUS_F_HALF: {
+            g_Score[tid][0] += ( score - g_scorebuff[tid] > 0 ) ? 1 : 0;
+            if( g_Score[0][0] + g_Score[1][0] == 15 ) EnterIntermission();
+        }
+        case STATUS_S_HALF: {
+            g_Score[tid][1] += ( score - g_scorebuff[tid] > 0 ) ? 1 : 0;
+            if( g_Score[tid][0] + g_Score[tid][1] == 16 ) MatchWin( team );                
+            if( g_Score[0][0] + g_Score[0][1] == 15 && g_Score[1][0] + g_Score[1][1] == 15 ) 
+                MatchDraw();
+        }
     }
-    g_scorebuff[tid] = score;
+    g_scorebuff[_:( team ) - 1] = score;
     
     return;
 }
    
-/*
-    This function hooks the event "TeamScore" and calls UpdateScore to update
-    scores for both teams.
+//------------------------------------------------
     
-    register_event( "TeamScore", "eventTeamScore", "a" )
-    
-    @param  none
-    @return none
-*/ 
 public eventTeamScore()
 {
-    static name[2], score, CsTeams: team;
+    static name[16], score, CsTeams: team;
     
-    read_data( 1, name, 1 );
+    read_data( 1, name, 15 );
     score = read_data( 2 );
     
     if( name[0] == 'C' )
@@ -1840,26 +1835,20 @@ public eventTeamScore()
         team = CS_TEAM_T;
     
     switch( g_StatusNow ) {
-        case STATUS_KNIFE: if( score > 0 ) KnifeRoundWon( team );
-        case STATUS_F_HALF, STATUS_S_HALF: UpdateScore( team, score );
+        case STATUS_KNIFE2: if( score > 0 ) KnifeRoundWon( team );
+        case STATUS_F_HALF: UpdateScore( g_StatusNow, team, score );
+        case STATUS_S_HALF: UpdateScore( g_StatusNow, team, score );
     }
     if( StatLive() ) ShowHUDScore();
     
     return PLUGIN_CONTINUE;
 }
 
-/*
-    This function hooks the message "TeamScore" and put the correct team score
-    onto the TAB scoreboard.
-    
-    register_message( g_msgidTeamScore, "msgTeamScore" )
-    
-    @param  none
-    @return none
-*/ 
-public msgTeamScore()
+//------------------------------------------------
+
+public MsgTeamScore()
 {
-    if( !StatMatch() ) return PLUGIN_CONTINUE;
+    if( !StatLive() ) return PLUGIN_CONTINUE;
     
     static teamname[16], buff[2], tindex;
     
@@ -1878,33 +1867,18 @@ public msgTeamScore()
     return PLUGIN_CONTINUE;
 }
 
-/*
-    This function hooks the event "HLTV" in order to hook round start.
-    Functions need to be called at round start is called here.
-    
-    register_event( "HLTV", "eventNewRoundStart", "a", "1=0", "2=0" )
-    
-    @param  none
-    @return none
-*/ 
+//------------------------------------------------
+
 public eventNewRoundStart()
 {
     // update round num
     UpdateRoundNum();
     // Show Team Money at round start
-    if( StatLive() && get_pcvar_num( g_pcShowMoney ) == 1 ) 
-        set_task( 0.1, "ShowTeamMoney" );
+    SetShowMoneyTask();
     
     return;
 }
 
-/*
-    This function updates the match round progress number. This will be called
-    at every round start when match is on live.
-    
-    @param  none
-    @return none
-*/ 
 UpdateRoundNum()
 {
     switch( g_StatusNow ) {
@@ -1919,55 +1893,21 @@ UpdateRoundNum()
     return;
 }
 
-//==============================================================================
-//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
-//  ©¦  MENU RELATED FUNCTIONS  ©¦
-//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
-//      ¡ú PlayerJoin
-//          ©À MenuShowSwapMenu ¡û
-//          ©¸ RefreshReadyList
-//      ¡ú HookChooseTeam
-//          ©À MenuShowSwapMenu ¡û
-//          ©¸ SwapCenterCountDown ¡û
-//      ©° MenuShowPickTeam ¡û
-//      ©¦   ©À TaskMenuCountDown ¡û
-//      ©¦   ©À MenuJudgePickTeamVote ¡û
-//      ©¦   ©¸ EnterFirstHalf
-//      ©¸ MenucmdPickTeam ¡û
-//      ©° MenuShowTeamMenu ¡û
-//      ©À MenucmdPUGTeam ¡û
-//      ©¦   ©¸ RefreshReadyList
-//      ©À HookTeamMenu ¡û
-//      ©¸ HookVGuiTeamMenu ¡û
-//      ©° MenuShowSwapMenu ¡û
-//      ©¸ MenucmdSwapMenu ¡û
-//          ©¸©° MenuShowSwapAsk ¡û
-//           ©¦   ©¸ MenuJudgeSwapAsk ¡û
-//           ©¸ MenucmdSwapAsk ¡û
-//      ©° MenuShowMatchMenu ¡û
-//      ©¸ MenucmdMatchMenu ¡û
-//      ©° MenuShowVoteMap ¡û
-//      ©¦   ©¸ MenuJudgeVoteMap ¡û
-//      ©¦       ©¸ DelayChangelevel ¡û
-//      ©¸ MenucmdVoteMap ¡û
-//      ©° MenuShowVoteKick ¡û
-//      ©¸ MenucmdVoteKick ¡û
-//          ©¸©° MenuJudgeAskKick ¡û
-//           ©¸ MenucmdAskKick ¡û
+// MENU part====================================================================
+//
+//
 //==============================================================================
 
-/*
-    This function shows a count down HUD message to prompt time left for the menu.
-    This function uses a normal HUD message.
+// function to show menu count-down message
+ShowMenuCountDown( t )
+{
+    set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_COUNTDOWN[0], HUD_POS_COUNTDOWN[1], 0, 0.0, 1.0, 0.0, 0.0, CH_COUNTDOWN );
+    show_hudmessage( 0, "%L %d", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT", t );
     
-    HUD params:
-        ©À CHANNEL:    CH_COUNTDOWN
-        ©À POSITION:   HUD_POS_COUNTDOWN[]
-        ©¸ COLOR:      #FFFFFF (white)
-    
-    @param  tskid       :   showtime = tskid - OFFSET_COUNT is the total time for counting down (sec)
-    @return none
-*/ 
+    return;
+}
+
+// task to show a count down menu-off time
 public TaskMenuCountDown( tskid )
 {
     static bool: firstcall;
@@ -1979,8 +1919,8 @@ public TaskMenuCountDown( tskid )
     }
     
     if( time > 0 ) {
-        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_COUNTDOWN[0], HUD_POS_COUNTDOWN[1], 0, 0.0, 1.0, 0.0, 0.0, CH_COUNTDOWN );
-        show_hudmessage( 0, "%L %d", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT", time-- );
+        ShowMenuCountDown( time );
+        time--;
     }
     else
         firstcall = false;
@@ -1988,142 +1928,9 @@ public TaskMenuCountDown( tskid )
     return;
 }
 
-/*
-    This function shows a centered count down message for the swap team menu.
-    
-    @param  para[0]     :   total time for counting down (sec)
-    @param  para[1]     :   index of player
-    @return none
-*/ 
-public SwapCenterCountDown( const para[] )
-{
-    static bool: first;
-    static time;
-    new id = para[1];
-    
-    if( !first ) {
-        time = para[0] - 1;
-        first = true;
-    }
-    client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU", time );
-    if( time > 0 ) 
-        time--;
-    else 
-        first = false;
-        
-    return;
-}
+//------------------------------------------------
 
-/*
-    This function is used for take the place of default client command "chooseteam".
-    This function will check the team status before put player in corresponding
-    team.
-    
-    @param  id      :   index of player
-    @return none
-*/
-public HookChooseTeam( id )
-{
-    const TSWAP = 5;
-    static szt[2];
-    new tl = get_pcvar_num( g_pcTeamLimit );
-    new CsTeams: team = cs_get_user_team( id );
-    new bool: flag;
-    
-    if( tl == 1 ) {
-        switch( team ) {
-            case CS_TEAM_T: flag = g_Cnum >= 5;
-            case CS_TEAM_CT: flag = g_Tnum >= 5;
-            case CS_TEAM_SPECTATOR: flag = ( g_Cnum >= 5 && g_Tnum >= 5 );
-        }
-        if( StatLive() && flag ) {
-            if( team == CS_TEAM_CT || team == CS_TEAM_T ) {
-                set_task( float( TSWAP ), "MenuShowSwapMenu", id + OFFSET_MENU );
-                client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU", TSWAP );
-                szt[0] = TSWAP;
-                szt[1] = id;
-                set_task( 1.0, "SwapCenterCountDown", id + OFFSET_COUNT, szt, 2, "a", TSWAP );
-            }
-            else
-                client_print( id, print_center, "%L", LANG_SERVER, "PUG_CANTTEAMSELECT" );
-        }
-        else
-            return PLUGIN_CONTINUE;
-    }
-    else
-        return PLUGIN_CONTINUE;
-    
-    return PLUGIN_HANDLED;
-}
-
-/*
-    This function is used for take the place of default client command "jointeam".
-    This function will check the team status before put player in corresponding
-    team.
-    
-    @param  id      :   index of player
-    @return none
-*/
-public PlayerJoin( id )
-{
-    static args[16], argn;
-    new tl = get_pcvar_num( g_pcTeamLimit );
-    
-    if( StatLive() ) {
-        new CsTeams: team = cs_get_user_team( id );
-        switch( team ) {
-            case CS_TEAM_T, CS_TEAM_CT: {
-                client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU" );
-                set_task( 5.0, "MenuShowSwapMenu", id + OFFSET_MENU );
-            }
-            default:
-                client_print( id, print_center, "%L", LANG_SERVER, "PUG_CANTTEAMSELECT" );
-        }
-        return PLUGIN_HANDLED;
-    }
-    
-    read_argv( 1, args, 15 );
-    argn = str_to_num( args );
-    
-    if( argn != 1 && argn != 2 && argn != 5 && argn != 6 ) return PLUGIN_HANDLED;
-    
-    switch( argn ) {
-        case 1:
-            if( g_Tnum >= 5 && tl == 1 ) {
-                client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_CANTJOINT" );
-                client_cmd( id, "chooseteam" );
-                return PLUGIN_HANDLED;
-            }
-            else
-                engclient_cmd( id, "jointeam", "1" );
-        case 2:
-            if( g_Cnum >= 5 && tl == 1 ) {
-                client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_CANTJOINCT" );
-                client_cmd( id, "chooseteam" );
-                return PLUGIN_HANDLED;
-            }
-            else
-                engclient_cmd( id, "jointeam", "2" );
-        case 6: {
-            engclient_cmd( id, "jointeam", "6" );
-            return PLUGIN_HANDLED;
-        }
-    }
-    set_task( 0.1, "RefreshReadyList" );
-    
-    return PLUGIN_HANDLED;
-}
-
-
-/*
-    These bunch of functions aims to proceed with a menu that shows after knife
-    round to let the winner's team to pick the team they want.
-    
-    Show Menu func      :   MenuShowPickTeam
-    Menu Select func    :   MenucmdPickTeam
-    Result func:        :   MenuJudgePickTeamVote
-*/ 
-MenuShowPickTeam( CsTeams: team )
+ShowPickTeamMenu( CsTeams: team )
 {
     const   SHOWTIME = 8;
     static szMenu[256], len;
@@ -2141,17 +1948,18 @@ MenuShowPickTeam( CsTeams: team )
         t = cs_get_user_team( id );
         if( t == team ) show_menu( id, 3, szMenu, SHOWTIME, "KnifeRound Won Menu" );
     }
-    set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_COUNTDOWN[0], HUD_POS_COUNTDOWN[1], 0, 0.0, 1.0, 0.0, 0.0, CH_COUNTDOWN );
-    show_hudmessage( 0, "%L %d", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT", SHOWTIME );
+    ShowMenuCountDown( SHOWTIME );
     set_task( 1.0, "TaskMenuCountDown", SHOWTIME + OFFSET_COUNT, _, _, "a", SHOWTIME - 1 );
     
-    set_task( float( SHOWTIME ), "MenuJudgePickTeamVote" );
+    set_task( float( SHOWTIME ), "PickTeamVoteJudge" );
     set_task( float( SHOWTIME + 1 ), "EnterFirstHalf" );
    
     return;
 }
 
-public MenucmdPickTeam( id, key )
+//------------------------------------------------
+
+public cmdPickTeamMenu( id, key )
 {
     static name[32], Msg[128];
     
@@ -2167,7 +1975,9 @@ public MenucmdPickTeam( id, key )
     return;
 }
 
-public MenuJudgePickTeamVote()
+//------------------------------------------------
+
+public PickTeamVoteJudge()
 {
     if( g_mPickTeam > 2 ) {
         ServerSay( "%L", LANG_SERVER, "PUG_VOTESWAP" );
@@ -2179,18 +1989,63 @@ public MenuJudgePickTeamVote()
     return;
 }
 
-/*
-    These bunch of functions aims to override the original team select menu.
-    For our own team select menu, we can realise team management and team
-    restriction.
+//------------------------------------------------
+
+public SwapCenterCountDown( const szpara[] )
+{
+    static bool: first;
+    static time;
+    new id = szpara[1];
     
-    Show Menu func      :   MenuShowTeamMenu
-    Menu Select func    :   MenucmdPUGTeam
-    Result func         :   N/A
+    if( !first ) {
+        time = szpara[0] - 1;
+        first = true;
+    }
+    client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU", time );
+    if( time > 0 ) 
+        time--;
+    else 
+        first = false;
+        
+    return;
+}
+
+public HookChooseTeam( id )
+{
+    const TSWAP = 5;
+    static szt[2];
+    new tl = get_pcvar_num( g_pcTeamLimit );
+    new CsTeams: team = cs_get_user_team( id );
+    new bool: flag;
     
-    The following 2 functions is to block the original menu
-    Others              :   HookTeamMenu, HookVGuiTeamMenu
-*/ 
+    if( tl == 1 ) {
+        switch( team ) {
+            case CS_TEAM_T: flag = g_Cnum >= 5;
+            case CS_TEAM_CT: flag = g_Tnum >= 5;
+            case CS_TEAM_SPECTATOR: flag = ( g_Cnum >= 5 && g_Tnum >= 5 );
+        }
+        if( StatLive() && flag ) {
+            if( team == CS_TEAM_CT || team == CS_TEAM_T ) {
+                set_task( float( TSWAP ), "ShowSwapMenu", id + OFFSET_MENU );
+                client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU", TSWAP );
+                szt[0] = TSWAP;
+                szt[1] = id;
+                set_task( 1.0, "SwapCenterCountDown", id + OFFSET_COUNT, szt, 2, "a", TSWAP );
+            }
+            else
+                client_print( id, print_center, "%L", LANG_SERVER, "PUG_CANTTEAMSELECT" );
+        }
+        else
+            ShowTeamMenu( id );
+    }
+    else
+        ShowTeamMenu( id );
+    
+    return PLUGIN_HANDLED;
+}
+
+//------------------------------------------------
+
 public HookTeamMenu( msgid, idest, id )
 {
     static MenuCode[64];
@@ -2199,21 +2054,25 @@ public HookTeamMenu( msgid, idest, id )
     if( !equal( MenuCode, TEAMMENU1 ) && !equal( MenuCode, TEAMMENU2 ) ) 
         return PLUGIN_CONTINUE;
         
-    MenuShowTeamMenu( id );
+    ShowTeamMenu( id );
     
     return PLUGIN_HANDLED;
 }
+
+//------------------------------------------------
 
 public HookVGuiTeamMenu( msgid, idest, id )
 {
     if( get_msg_arg_int( 1 ) != 2 ) return PLUGIN_CONTINUE;
     
-    MenuShowTeamMenu( id );
+    ShowTeamMenu( id );
     
     return PLUGIN_HANDLED;
 }
 
-MenuShowTeamMenu( id )
+//------------------------------------------------
+
+ShowTeamMenu( id )
 {
     static szMenu[256], len;
     new key = 0, CsTeams: team = cs_get_user_team( id );
@@ -2253,7 +2112,9 @@ MenuShowTeamMenu( id )
     return;
 }
 
-public MenucmdPUGTeam( id, key )
+//------------------------------------------------
+
+public cmdPUGTeamMenu( id, key )
 {
     new CsTeams: team = cs_get_user_team( id ), ts[2], CsTeams: t;
         
@@ -2304,19 +2165,9 @@ public MenucmdPUGTeam( id, key )
     return;
 }
 
-/*
-    These bunch of functions aims to show a swap request menu to let player
-    send a request to other player to swap their teams. After select the player
-    wants to swap with, another SWAPASK menu will show to the player being selected.
-    
-    Show Menu func      :   MenuShowSwapMenu, MenuShowSwapAsk
-    Menu Select func    :   MenucmdSwapMenu, MenucmdSwapAsk
-    Result func         :   MenuJudgeSwapAsk
-    
-    The following 2 functions is to block the original menu
-    Others              :   HookTeamMenu, HookVGuiTeamMenu
-*/ 
-public MenuShowSwapMenu( tskid )
+//------------------------------------------------
+
+public ShowSwapMenu( tskid )
 {
     new id = tskid - OFFSET_MENU;
     new CsTeams: team = cs_get_user_team( id );
@@ -2329,7 +2180,7 @@ public MenuShowSwapMenu( tskid )
     }
     
     formatex( szMenuTitle, 63, "\y%L", LANG_SERVER, "PUG_MENU_SWAPTITLE" );
-    hSwapMenu = menu_create( szMenuTitle, "MenucmdSwapMenu" );
+    hSwapMenu = menu_create( szMenuTitle, "cmdSwapMenu" );
     for( i = 0; i < MAX_PLAYERS; i++ ) {
         tid = i + 1;
         if( !is_user_connected( tid ) ) continue;
@@ -2359,7 +2210,9 @@ public MenuShowSwapMenu( tskid )
     return PLUGIN_CONTINUE;
 }
 
-public MenucmdSwapMenu( id, menu, item )
+//------------------------------------------------
+
+public cmdSwapMenu( id, menu, item )
 {
     static szBuffer[8], tid, szName[8];
     new _access, item_callback;
@@ -2377,13 +2230,14 @@ public MenucmdSwapMenu( id, menu, item )
     
     g_SwapRequest[id] = tid;
     g_SwapBeRQ[tid] = id;
-    
-    MenuShowSwapAsk( tid );
+    ShowSwapAsk( tid );
     
     return;
 }
-//--------------------------------------------------------------------
-MenuShowSwapAsk( tid )
+
+//------------------------------------------------
+
+ShowSwapAsk( tid )
 {
     static szMenu[256], len, name1[32], name2[32], tn[16];
     new id = g_SwapBeRQ[tid], CsTeams: team;
@@ -2403,12 +2257,14 @@ MenuShowSwapAsk( tid )
     len += formatex( szMenu[len], 255 - len, "\r2.  \w%L", LANG_SERVER, "PUG_MENU_REJSWAP" );
     show_menu( tid, 3, szMenu, 8, "Agree to swap?" );
     
-    set_task( 8.0, "MenuJudgeSwapAsk", tid + OFFSET_MENU );
+    set_task( 8.0, "SwapAskJudge", tid + OFFSET_MENU );
     
     return;
 }
 
-public MenucmdSwapAsk( id, key )
+//------------------------------------------------
+
+public cmdSwapAsk( id, key )
 {
     switch( key ) {
         case 0: g_SwapJudge[id] = true;
@@ -2418,7 +2274,9 @@ public MenucmdSwapAsk( id, key )
     return;
 }
 
-public MenuJudgeSwapAsk( tskid )
+//------------------------------------------------
+
+public SwapAskJudge( tskid )
 {
     new tid = tskid - OFFSET_MENU;
     new id = g_SwapBeRQ[tid];
@@ -2463,15 +2321,9 @@ public MenuJudgeSwapAsk( tskid )
     return;
 }
 
-/*
-    These bunch of functions aims to show a menu that has match administrative
-    menu to the administrators.
-    
-    Show Menu func      :   MenuShowMatchMenu
-    Menu Select func    :   MenucmdMatchMenu
-    Result func         :   N/A
-*/ 
-public MenuShowMatchMenu( id, level, cid )
+//------------------------------------------------
+
+public ShowMatchMenu( id, level, cid )
 {
     if( !cmd_access( id, level, cid, 1 ) ) return PLUGIN_HANDLED;
 
@@ -2484,15 +2336,16 @@ public MenuShowMatchMenu( id, level, cid )
     len += formatex( szMenu[len], 511 - len, "\r4.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHRER3" );
     len += formatex( szMenu[len], 511 - len, "\r5.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHSTOP" );
     len += formatex( szMenu[len], 511 - len, "\r6.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHPAUSE" );
-    len += formatex( szMenu[len], 511 - len, "\r7.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHSWAPTEAM" );
     len += formatex( szMenu[len], 511 - len, "^n\r0.  \w%L^n", LANG_SERVER, "PUG_MENU_EXITNAME" );
     
-    show_menu( id, 0x27f, szMenu, -1, "PUG Admin Menu" );
+    show_menu( id, 0x23f, szMenu, -1, "PUG Admin Menu" );
     
     return PLUGIN_HANDLED;
 }
 
-public MenucmdMatchMenu( id, key )
+//------------------------------------------------
+
+public cmdMatchMenu( id, key )
 {       
     switch( key ) {
         case 0: client_cmd( id, "hp_forcestart -knife" );
@@ -2501,20 +2354,14 @@ public MenucmdMatchMenu( id, key )
         case 3: client_cmd( id, "hp_forcerer3" );
         case 4: client_cmd( id, "hp_forcestop" );
         case 5: client_cmd( id, "amx_pause" );
-        case 6: client_cmd( id, "hp_forceswap" );
     }
     
     return;
 }
 
-/*
-    These bunch of functions aims to begin a map vote among all players.
-    
-    Show Menu func      :   MenuShowVoteMap
-    Menu Select func    :   MenucmdVoteMap
-    Result func         :   MenuJudgeVoteMap
-*/ 
-public MenuShowVoteMap( id )
+//------------------------------------------------
+
+public ShowVoteMap( id )
 {
     if( g_bIsOnVote ) {
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_ALRDYVOTE" );
@@ -2552,24 +2399,29 @@ public MenuShowVoteMap( id )
         k--;
     }
     show_menu( 0, 0x1f, Msg, 10, "Vote Map Menu" );
-    set_task( 10.0, "MenuJudgeVoteMap" );
+    set_task( 10.0, "VoteMapJudge" );
     
     return PLUGIN_HANDLED;
 }
 
-public MenucmdVoteMap( id, key )
+//------------------------------------------------
+
+public cmdVoteMap( id, key )
 {
-    static mapname[32];
+    static mapname[32], name[32];
     new pos = g_VoteMapid[key];
     
+    get_user_name( id, name, 31 );
     ArrayGetString( g_Maps, pos, mapname, 31 );
     g_VoteCount[key]++;
-    ServerSay( "%L", LANG_SERVER, "PUG_MENU_VOTEDMSG", g_name[id], mapname );
+    client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_VOTEDMSG", name, mapname );
     
     return;
 }
 
-public MenuJudgeVoteMap()
+//------------------------------------------------
+
+public VoteMapJudge()
 {
     new i, mapname[32], max = 0, pos;
     
@@ -2592,6 +2444,8 @@ public MenuJudgeVoteMap()
     return;
 }
 
+//------------------------------------------------
+
 public DelayChangelevel( const mapname[] )
 {
     server_cmd( "amx_map %s", mapname );
@@ -2599,15 +2453,9 @@ public DelayChangelevel( const mapname[] )
     return;
 }
 
-/*
-    These bunch of functions aims to begin a kick vote for specific player
-    among all players.
-    
-    Show Menu func      :   MenuShowVoteKick
-    Menu Select func    :   MenucmdVoteKick, MenucmdAskKick
-    Result func         :   MenuJudgeAskKick
-*/ 
-public MenuShowVoteKick( tid )
+//------------------------------------------------
+
+public ShowVoteKick( tid )
 {
     if( g_bIsOnVote ) {
         client_print( tid, print_center, "%L", LANG_SERVER, "PUG_MENU_ALRDYVOTE" );
@@ -2619,7 +2467,7 @@ public MenuShowVoteKick( tid )
     
     g_bIsOnVote = true;
     formatex( Msg, 127, "\y%L", LANG_SERVER, "PUG_MENU_VOTEKICKTITLE" );
-    hMenu = menu_create( Msg, "MenucmdVoteKick" );
+    hMenu = menu_create( Msg, "cmdVoteKick" );
     for( i = 0; i < MAX_PLAYERS; i++ ) {
         id = i + 1;
         if( !is_user_connected( id ) ) continue;
@@ -2650,7 +2498,9 @@ public MenuShowVoteKick( tid )
     return PLUGIN_HANDLED;
 }
 
-public MenucmdVoteKick( id, menu, item )
+//------------------------------------------------
+
+public cmdVoteKick( id, menu, item )
 {
     static voted[32], tid, kicker[32], teamname[32], szMenu[256], len;
     new _access, item_callback, CsTeams: team;
@@ -2678,12 +2528,14 @@ public MenucmdVoteKick( id, menu, item )
     len += formatex( szMenu[len], 255 - len, "\r1.  \w%L^n", LANG_SERVER, "PUG_MENU_KICKAGREE" );
     len += formatex( szMenu[len], 255 - len, "\r2.  \w%L", LANG_SERVER, "PUG_MENU_KICKREJ" );
     show_menu( 0, 3, szMenu, 10, "Ask for Kick" );
-    set_task( 10.0, "MenuJudgeAskKick" );
+    set_task( 10.0, "AskMenuJudge" );
     
     return;
 }
-//--------------------------------------------------------------------
-public MenucmdAskKick( id, key )
+
+//------------------------------------------------
+
+public cmdAskMenu( id, key )
 {
     static name[32];
     
@@ -2698,7 +2550,9 @@ public MenucmdAskKick( id, key )
     return;
 }
 
-public MenuJudgeAskKick()
+//------------------------------------------------
+
+public AskMenuJudge()
 {
     new tot = get_playersnum( 0 );
     new Float: ratio;
@@ -2717,20 +2571,15 @@ public MenuJudgeAskKick()
     return;
 }
 
-/*
-    These bunch of functions aims to show a menu for all players.
-    
-    Show Menu func      :   MenuShowPlayerMenu
-    Menu Select func    :   MenucmdPlayerMenu
-    Result func         :   N/A
-*/ 
-public MenuShowPlayerMenu( id )
+//------------------------------------------------
+
+public ShowPlayerMenu( id )
 {
     static Msg[128], szid[2];
     new hMenu;
     
     formatex( Msg, 127, "\y%L", LANG_SERVER, "PUG_MENU_PLTITLE" );
-    hMenu = menu_create( Msg, "MenucmdPlayerMenu" );
+    hMenu = menu_create( Msg, "cmdPlayerMenu" );
     szid[1] = 0;
     formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PLVOTEMAP" );
     szid[0] = 0x30 + 1;
@@ -2770,7 +2619,9 @@ public MenuShowPlayerMenu( id )
     return PLUGIN_HANDLED;
 }
 
-public MenucmdPlayerMenu( id, menu, item )
+//------------------------------------------------
+
+public cmdPlayerMenu( id, menu, item )
 {
     static voted[32], tid, kicker[32];  
     new _access, item_callback;
@@ -2782,8 +2633,8 @@ public MenucmdPlayerMenu( id, menu, item )
     if( item == MENU_EXIT ) return;
     
     switch( tid ) {
-        case 1: MenuShowVoteMap( id );
-        case 2: MenuShowVoteKick( id );
+        case 1: ShowVoteMap( id );
+        case 2: ShowVoteKick( id );
         case 3: if( !StatLive() ) server_cmd( "sv_restartround 1" );
         case 4: client_cmd( id, "hp_matchmenu" );
         case 5: client_cmd( id, "amx_mapmenu" );
@@ -2796,16 +2647,9 @@ public MenucmdPlayerMenu( id, menu, item )
     return;
 }
 
-//==============================================================================
-//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
-//  ©¦  ADMINS' FORCE FUNCTIONS  ©¦
-//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
-//      ¡ú ForceStart
-//          ©¸ AutoStart
-//      ¡ú ForceReR3
-//      ¡ú ForceHalfR3
-//      ¡ú ForceStop
-//      ¡ú ForceSwap
+// FORCE Command Part===========================================================
+//
+//
 //==============================================================================
 
 public ForceStart( id, level, cid )
@@ -2854,7 +2698,7 @@ public ForceReR3( id, level, cid )
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_MATCHNOTLIVE" );
         return PLUGIN_HANDLED;
     }
-    if( g_StatusNow == STATUS_KNIFE ) {
+    if( g_StatusNow == STATUS_KNIFE1 || g_StatusNow == STATUS_KNIFE2 ) {
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_CANTUSECMD" );
         return PLUGIN_HANDLED;
     }
@@ -2888,7 +2732,7 @@ public ForceHalfR3( id, level, cid )
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_MATCHNOTLIVE" );
         return PLUGIN_HANDLED;
     }
-    if( g_StatusNow == STATUS_KNIFE ) {
+    if( g_StatusNow == STATUS_KNIFE1 || g_StatusNow == STATUS_KNIFE2 ) {
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_CANTUSECMD" );
         return PLUGIN_HANDLED;
     }
@@ -2977,58 +2821,22 @@ public ForceSwap( id, level, cid )
     return PLUGIN_HANDLED;
 }
 
-//==============================================================================
-//  ©°©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©´
-//  ©¦  SYSTEM PREDEFINED FORWARD FUNCTIONS  ©¦
-//  ©¸©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¼
-//      ¡ú client_infochanged
-//      ¡ú client_disconnect
-//      ¡ú plugin_cfg
-//      ¡ú plugin_init
-//==============================================================================
+//------------------------------------------------
 
-/*
-    This is a default forward function that called when player's info has been
-    changed. Here it is used to fix display bug of readylist when player changes
-    their names.
-    
-    @param  id      :   index of player whose info has been changed
-    @return none
-*/
-public client_infochanged( id )
+public ForceRefreshInfo( id, level, cid )
 {
-    static name[32];
+    if( !cmd_access( id, level, cid, 1 ) ) return PLUGIN_HANDLED;
     
-    get_user_info( id, "name", name, 31 );
-    if( !equal( name, g_name[id] ) ) 
-        formatex( g_name[id], 31, "%s", name );
-    
-    return PLUGIN_CONTINUE;
-}
-
-/*
-    This is a default forward function that called when player disconnect from
-    server. Here it is used to reset user informations.
-    
-    @param  id      :   index of player whose info has been changed
-    @return none
-*/
-public client_disconnect( id )
-{
-    new CsTeams: team = g_teamHash[id];
-    
-    g_teamHash[id] = CS_TEAM_UNASSIGNED;
-    if( g_ready[id] ) {
-        g_ready[id] = false;
-        g_rdy--;
-    }
-    switch( team ) {
-        case CS_TEAM_T: g_Tnum--;
-        case CS_TEAM_CT: g_Cnum--;
-    }
+    RefreshReadyList();
     
     return PLUGIN_HANDLED;
 }
+
+
+// PLUGIN INIT function=========================================================
+//
+//
+//==============================================================================
 
 public plugin_cfg()
 {
@@ -3048,64 +2856,57 @@ public plugin_init()
     
     register_dictionary( "hustcommon.txt" );
 
-    g_pcKnifeRound      = register_cvar( "hp_kniferound", "1" );
-    g_pcTeamLimit       = register_cvar( "hp_teamlimit", "1" );
-    g_pcShowMoney       = register_cvar( "hp_showmoney", "1" );
-    g_pcIntermission    = register_cvar( "hp_intermission", "0" );
-    g_pcMaxRound        = register_cvar( "hp_maxround", "15" );
-    g_pcWarmCfg         = register_cvar( "hp_warmcfg", "WarmCfg.cfg" );
-    g_pcMatchCfg        = register_cvar( "hp_matchcfg", "MatchCfg.cfg" );
+    g_pcKnifeRound = register_cvar( "hp_kniferound", "1" );
+    g_pcTeamLimit = register_cvar( "hp_teamlimit", "1" );
+    g_pcShowMoney = register_cvar( "hp_showmoney", "1" );
+    g_pcIntermission = register_cvar( "hp_intermission", "0" );
+    g_pcAmxShowAct = get_cvar_pointer( "amx_show_activity" );
+    g_pcHostName = get_cvar_pointer( "hostname" );
     
-    g_pcAmxShowAct      = get_cvar_pointer( "amx_show_activity" );
-    g_pcHostName        = get_cvar_pointer( "hostname" );
-    g_pcFreezeTime      = get_cvar_pointer( "mp_freezetime" );
-    
-    register_clcmd( "say ready", "PlayerReady", ADMIN_ALL, " - use command to enter ready status" );
-    register_clcmd( "say notready", "PlayerUNReady", ADMIN_ALL, " - use command to cancel ready status" );
-    register_clcmd( "say_team ready", "PlayerReady", ADMIN_ALL, " - use command to enter ready status" );
-    register_clcmd( "say_team notready", "PlayerUNReady", ADMIN_ALL, " - use command to cancel ready status" );
+    register_clcmd( "say !ready", "PlayerReady", ADMIN_ALL, " - use command to enter ready status" );
+    register_clcmd( "say !notready", "PlayerUNReady", ADMIN_ALL, " - use command to cancel ready status" );
     register_clcmd( "jointeam", "PlayerJoin", ADMIN_ALL, " - hook teamchange of user" );
     register_clcmd( "chooseteam", "HookChooseTeam", ADMIN_ALL, " - hook choose team" );
-    register_clcmd( "hp_matchmenu", "MenuShowMatchMenu", PLUGIN_ACCESS, " - show admin menu" );
-    register_clcmd( "say votemap", "MenuShowVoteMap", ADMIN_ALL, " - hold a vote for change map" );
-    register_clcmd( "say votekick", "MenuShowVoteKick", ADMIN_ALL, " - hold a vote for kick player" );
-    register_clcmd( "say menu", "MenuShowPlayerMenu", ADMIN_ALL, " - open player menu" );
-    register_clcmd( "say_team menu", "MenuShowPlayerMenu", ADMIN_ALL, " - open player menu" );
+    register_clcmd( "hp_matchmenu", "ShowMatchMenu", PLUGIN_ACCESS, " - show admin menu" );
+    register_clcmd( "say !votemap", "ShowVoteMap", ADMIN_ALL, " - hold a vote for change map" );
+    register_clcmd( "say !votekick", "ShowVoteKick", ADMIN_ALL, " - hold a vote for kick player" );
+    register_clcmd( "say !menu", "ShowPlayerMenu", ADMIN_ALL, " - open player menu" );
+    register_clcmd( "say menu", "ShowPlayerMenu", ADMIN_ALL, " - open player menu" );
     
     register_concmd( "hp_forcestart", "ForceStart", PLUGIN_ACCESS, " - use this command to force start game" );
     register_concmd( "hp_forcerer3", "ForceReR3", PLUGIN_ACCESS, " - use this command to restart whole match" );
     register_concmd( "hp_forcehalfr3", "ForceHalfR3", PLUGIN_ACCESS, " - use this command to restart half matching" );
     register_concmd( "hp_forcestop", "ForceStop", PLUGIN_ACCESS, " - use this command to force the game stop and enter warm section" );
     register_concmd( "hp_forceswap", "ForceSwap", PLUGIN_ACCESS, " - use this command to force team swap" );
+    register_concmd( "hp_forcerefreshinfo", "ForceRefreshInfo", PLUGIN_ACCESS, " - use this command to force refresh player info" );
     
     register_event( "TeamScore", "eventTeamScore", "a" );
-    register_event( "CurWeapon", "eventCurWeapon", "be", "1=0", "2=29" );
+    register_event( "CurWeapon", "eventCurWeapon", "be" );
     register_event( "HLTV", "eventNewRoundStart", "a", "1=0", "2=0" );
     register_event( "ResetHUD", "eventResetHUD", "b" );
     register_event( "TeamInfo", "eventTeamInfo", "a" );
     
-    g_hamPostSpawn      = RegisterHam( Ham_Spawn, "player", "hamPostPlayerSpawn", 1 );
-    g_hamFwdDeath       = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 );
-    g_hamPostTouch[0]   = RegisterHam( Ham_Touch, "armoury_entity", "hamPostWeaponTouch", 1 );
-    g_hamPostTouch[1]   = RegisterHam( Ham_Touch, "weaponbox", "hamPostWeaponTouch", 1 );
-    g_hamPostTouch[2]   = RegisterHam( Ham_Touch, "weapon_shield", "hamPostWeaponTouch", 1 );
+    g_hamPostSpawn = RegisterHam( Ham_Spawn, "player", "hamPostPlayerSpawn", 1 );
+    g_hamFwdDeath = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 );
+    g_hamPostTouch[0] = RegisterHam( Ham_Touch, "armoury_entity", "hamPostWeaponTouch", 1 );
+    g_hamPostTouch[1] = RegisterHam( Ham_Touch, "weaponbox", "hamPostWeaponTouch", 1 );
+    g_hamPostTouch[2] = RegisterHam( Ham_Touch, "weapon_shield", "hamPostWeaponTouch", 1 );
     
-    g_msgidTeamScore    = get_user_msgid( "TeamScore" );
-    g_msgidHideWeapon   = get_user_msgid( "HideWeapon" );
-    g_msgidRoundTime    = get_user_msgid( "RoundTime" );
-    g_msgidWeapPickup   = get_user_msgid( "WeapPickup" );
-    g_msgidCurWeapon    = get_user_msgid( "CurWeapon" );
+    g_msgidTeamScore = get_user_msgid( "TeamScore" );
+    g_msgidHideWeapon = get_user_msgid( "HideWeapon" );
+    g_msgidRoundTime = get_user_msgid( "RoundTime" );
+    g_msgidWeapPickup = get_user_msgid( "WeapPickup" );
     
     register_message( get_user_msgid( "ShowMenu" ), "HookTeamMenu" );
     register_message( get_user_msgid( "VGUIMenu" ), "HookVGuiTeamMenu" );
-    register_message( g_msgidTeamScore, "msgTeamScore" );
+    register_message( g_msgidTeamScore, "MsgTeamScore" );
     
-    register_menu( "KnifeRound Won Menu", 0x3ff, "MenucmdPickTeam", 0 );
-    register_menu( "PUG Team Menu", 0x3ff, "MenucmdPUGTeam", 0 );
-    register_menu( "Agree to swap?", 0x3ff, "MenucmdSwapAsk", 0 );
-    register_menu( "PUG Admin Menu", 0x3ff, "MenucmdMatchMenu", 0 );
-    register_menu( "Vote Map Menu", 0x3ff, "MenucmdVoteMap", 0 );
-    register_menu( "Ask for Kick", 0x3ff, "MenucmdAskKick", 0 );
+    register_menu( "KnifeRound Won Menu", 0x3ff, "cmdPickTeamMenu", 0 );
+    register_menu( "PUG Team Menu", 0x3ff, "cmdPUGTeamMenu", 0 );
+    register_menu( "Agree to swap?", 0x3ff, "cmdSwapAsk", 0 );
+    register_menu( "PUG Admin Menu", 0x3ff, "cmdMatchMenu", 0 );
+    register_menu( "Vote Map Menu", 0x3ff, "cmdVoteMap", 0 );
+    register_menu( "Ask for Kick", 0x3ff, "cmdAskMenu", 0 );
     
     return;
 }
