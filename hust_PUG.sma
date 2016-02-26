@@ -2,9 +2,9 @@
 *
 *   HUST Pick-Up-Game Mode Plugin
 *
-*   │  Author  :       Chen Shi (aka. real, from China, HUST CSer & NUDT)
+*   │  Author  :       Chen Shi (aka. real, HUST CSer & NUDT)
 *   │  Contact :       bigbryant@qq.com
-*   │  Version :       1.3
+*   │  Version :       1.4a3
 *
 *   This plugin is free software; you can redistribute it and/or modify it
 *   under the terms of the GNU General Public License as published by the
@@ -16,7 +16,11 @@
 *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
 *   General Public License for more details.
 *
-*   │  Changelog: 2016-02-14
+*   │  Changelog: 2016-02-26
+*
+*       1.4a3:  1) add 5-link function to the plugin
+*               2) improve comments for the code
+*               3) minor code optimization
 *
 *       1.3:    1) merged ShowMoney and PlayerMenu into plugin
 *               2) set endless round time in warmup time
@@ -92,6 +96,10 @@ new const PLUGIN_ACCESS     =   ADMIN_RESERVATION;
 // max player supported
 const   MAX_PLAYERS         =   32;
 
+// default config file sub directory
+new const PUG_CONFIG_DIR[]  =   "hustpug";
+new const PUG_CONFIG_FILE[] =   "hustpug.cfg";
+
 // vote map list item num (9 max)
 const   MAP_VOTE_NUM        =   9;
 
@@ -103,6 +111,7 @@ const   OFFSET_COUNT        =   250000;
 const   OFFSET_SCROLL       =   300000;
 const   OFFSET_SETMODEL     =   350000;
 const   OFFSET_R3           =   400000;
+const   OFFSET_5LINK        =   450000;
 
 // consts of different hudmsg task ID
 const   TASKID_SHOWREADY    =   OFFSET_HUDMSG + ( 1 << 0 );
@@ -115,6 +124,7 @@ const   CH_RDYLIST          =   2;
 const   CH_NOTIFY           =   1;
 const   CH_SHOWMONEY        =   3;
 const   CH_COUNTDOWN        =   4;
+const   CH_5LINK            =   2;
 
 // HUD message positions
 new const Float: HUD_POS_RDYLIST[]      =   { 0.05, 0.2 };
@@ -125,6 +135,7 @@ new const Float: HUD_POS_COUNTDOWN[]    =   { 0.03, 0.6 };
 new const Float: HUD_POS_PLRDY[]        =   { -1.0, 0.55 };
 new const Float: HUD_POS_MATCHNOT[]     =   { -1.0, 0.4 };
 new const Float: HUD_POS_ACT[]          =   { -1.0, 0.3 };
+new const Float: HUD_POS_5LINK[]        =   { -1.0, 0.8 };
     
 new g_HudPlRdyPosFlag[10];      // array to record available HUD display position
 
@@ -187,26 +198,26 @@ new const WEAPON_MAXAMMO[] = {
 
 // const for blocking map objectives in warmup time
 new const OBJECTIVE_ENTS[][] = {
-	"func_bomb_target",
-	"info_bomb_target",
-	"hostage_entity",
-	"monster_scientist",
-	"func_hostage_rescue",
-	"info_hostage_rescue",
-	"info_vip_start",
-	"func_vip_safetyzone",
-	"func_escapezone"
+    "func_bomb_target",
+    "info_bomb_target",
+    "hostage_entity",
+    "monster_scientist",
+    "func_hostage_rescue",
+    "info_hostage_rescue",
+    "info_vip_start",
+    "func_vip_safetyzone",
+    "func_escapezone"
 };
 new const _OBJECTIVE_ENTS[][] = {
-	"_func_bomb_target",
-	"_info_bomb_target",
-	"_hostage_entity",
-	"_monster_scientist",
-	"_func_hostage_rescue",
-	"_info_hostage_rescue",
-	"_info_vip_start",
-	"_func_vip_safetyzone",
-	"_func_escapezone"
+    "_func_bomb_target",
+    "_info_bomb_target",
+    "_hostage_entity",
+    "_monster_scientist",
+    "_func_hostage_rescue",
+    "_info_hostage_rescue",
+    "_info_vip_start",
+    "_func_vip_safetyzone",
+    "_func_escapezone"
 };
 const   HW_HIDE_TIMER_FLAG  =   ( 1 << 4 );
 
@@ -233,14 +244,24 @@ new     g_pcShowMoney;          // hp_showmoney
 new     g_pcIntermission;       // hp_intermission
 new     g_pcMaxRound;           // hp_maxround
 new     g_pcWarmCfg, g_pcMatchCfg; // hp_warmcfg, hp_matchcfg
+new     g_pcEnable5Link;        // hp_enable5link
+new     g_pcLinkTime;           // hp_linktime
 new     g_pcAmxShowAct;         // amx_show_activity
 new     g_pcHostName;           // hostname
 new     g_pcFreezeTime;         // mp_freezetime
+new     g_pcAllTalk;            // sv_alltalk
+
+// global match parameters
+new     g_mMaxRound;            // max round of the match
 
 // vars to save swap requests and choices
 new     g_SwapRequest[MAX_PLAYERS + 1];             // player requesting states
 new     g_SwapBeRQ[MAX_PLAYERS + 1];                // player requested states
 new     bool: g_SwapJudge[MAX_PLAYERS + 1];         // if swap agreed
+    
+// vars to save 5-link status of player
+new     bool: g_playertalk[MAX_PLAYERS + 1];
+new     g_5linkcount[MAX_PLAYERS + 1];
     
 // some message ids
 new     g_msgidTeamScore;       // message id for "TeamScore" Msg
@@ -258,10 +279,13 @@ new     g_hmsgCurWeapon;        // handle for registered message "CurWeapon"
 new     HamHook: g_hamPostSpawn;        // handle of HookPlayerSpawnPost
 new     HamHook: g_hamFwdDeath;         // handle of HookPlayerDeathFwd
 new     HamHook: g_hamPostTouch[3];     // handle of Ham_Touch for weaponbox, armoury and weapon_shield
+new     HamHook: g_hamPostDeath5Link;
+new     HamHook: g_hamFwdSpawn5Link;
 
 // forward handles
 new     g_hfwdGetCvarFloat;
 new     g_hfwdSetModel;
+new     g_hfwdSetClientListen;
 
 // Team menu hooking message
 new const TEAMMENU1[]   =       "#Team_Select";
@@ -279,6 +303,158 @@ new     g_hostname[32];                 // hostname of server
 //====GLOBAL VAR DEFINITION FINISHED============================================
 
 
+//==============================================================================
+//  ┌────────────────────────────┐
+//  │  5-LINK RELATED FUNCTIONS  │
+//  └────────────────────────────┘
+//      → hamFwdSpawn5Link
+//      → hamPostDeath5Link
+//          ├ RemoveTalkFlag ←
+//          │   └ PlayerMute ← 
+//          └ Show5LinkCountdown ←
+//      → fwdSetClListen
+//==============================================================================
+
+/*
+    This function is a HAM forward to hook player spawn in when using 5-link
+    function. It aims to recover talking status of player.
+    
+    g_hamFwdSpawn5Link = RegisterHam( Ham_Spawn, "player", "hamFwdSpawn5Link", 0 )
+    
+    @param  id      :   index of spawned player
+    @return none
+*/
+public hamFwdSpawn5Link( id )
+{
+    g_playertalk[id] = true;
+    remove_task( id + OFFSET_5LINK, 0 );
+    
+    return HAM_IGNORED;
+}
+
+/*
+    This function is a HAM forward to hook player death in when using 5-link
+    function. It aims to set a certain amount of time for player talking with
+    his teammates after death. Talk time is set by CVAR hp_linktime.
+    
+    g_hamPostDeath5Link = RegisterHam( Ham_Killed, "player", "hamPostDeath5Link", 1 )
+    
+    @param  id      :   index of spawned player
+    @return none
+*/
+public hamPostDeath5Link( id )
+{
+    if( get_pcvar_num( g_pcAllTalk ) == 1 || !StatLive() ) return HAM_IGNORED;
+
+    new talktime = get_pcvar_num( g_pcLinkTime );
+    
+    if( talktime > 60 ) talktime = 60;
+    if( talktime > 0 ) {
+        set_task( float( talktime ), "RemoveTalkFlag", id + OFFSET_5LINK );
+        g_5linkcount[id] = talktime;
+        set_task( 1.0, "Show5LinkCountdown", id + OFFSET_5LINK, _, _, "a", talktime );
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 1.0, 0.0, 0.0, CH_5LINK );
+        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_MSG", talktime );
+    }
+    else {
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 5.0, 0.0, 0.0, CH_5LINK );
+        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_MSG_PERM" );
+    }
+    
+    return HAM_IGNORED;
+}
+
+/*
+    This function is used to display a count down message when team talk is
+    appearing its functionality.
+    This function is using a NORMAL HUD message
+    
+    HUD params:
+        ├ CHANNEL:    CH_5LINK
+        ├ POSITION:   HUD_POS_5LINK[]
+        └ COLOR:      #FFFFFF (white)
+    
+    @param  tskid       :   tskid = id + OFFSET_5LINK is the task id.
+    @return none
+*/
+public Show5LinkCountdown( tskid )
+{
+    new id = tskid - OFFSET_5LINK;
+    
+    if( --g_5linkcount[id] > 0 ) {
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 1.0, 0.0, 0.0, CH_5LINK );
+        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_MSG", g_5linkcount[id] );
+    }
+    else {
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 5.0, 0.0, 0.0, CH_5LINK );
+        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_OVERMSG" );
+    }
+    
+    return;
+}
+
+/*
+    This function is used set a player unable to talk.
+    
+    @param  id          :   index of player
+    @return none
+*/
+public PlayerMute( id )
+{
+    static receiver;
+    
+    for( new i = 0; i < MAX_PLAYERS; i++ ) {
+        receiver = i + 1;
+        if( !is_user_connected( receiver ) || receiver == id ) continue;
+        if( g_teamHash[id] != g_teamHash[receiver] ) continue;
+            
+        engfunc( EngFunc_SetClientListening, receiver, id, false );
+    }
+    
+    return;
+}
+
+/*
+    This function is used set a player unable to talk.
+    
+    @param  id          :   index of player
+    @return none
+*/
+public RemoveTalkFlag( tskid )
+{        
+    new id = tskid - OFFSET_5LINK;
+    
+    if( is_user_alive( id ) ) return;
+    
+    g_playertalk[id] = false;
+    PlayerMute( id );
+    
+    return;
+}
+
+/*
+    This function is a fakemeta forward hook SetClientListening
+    
+    g_hfwdSetClientListen = register_forward( FM_Voice_SetClientListening, "fwdSetClListenCl", 0 )
+    
+    @param  receiver    :   listener
+    @param  sender      :   talker
+    @param  bListen     :   if listener can hear talker
+    @return none
+*/
+public fwdSetClListen( receiver, sender, bool: bListen )
+{
+    if( !is_user_connected( receiver ) || 
+        !is_user_connected( sender ) || 
+        is_user_alive( sender ) ||
+        sender == receiver ||
+        g_teamHash[receiver] != g_teamHash[sender] )
+        return FMRES_IGNORED;
+        
+    engfunc( EngFunc_SetClientListening, receiver, sender, g_playertalk[sender] );
+    
+    return FMRES_SUPERCEDE;
+}
 
 //==============================================================================
 //  ┌─────────────────────────────────────┐
@@ -470,7 +646,7 @@ public ShowHUDScore()
         case STATUS_S_HALF: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_S_HALF" );
         case STATUS_INTER: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_INTER" );    
     }
-    len += formatex( Msg[len], 255 - len, " %L", LANG_SERVER, "PUG_MATCHPROC", tt, 30 );
+    len += formatex( Msg[len], 255 - len, " %L", LANG_SERVER, "PUG_MATCHPROC", tt, 2 * g_mMaxRound );
     len += formatex( Msg[len], 255 - len, "^n%L", LANG_SERVER, "PUG_SCOREBOARD", St, Sc );
     set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_SCOREBOARD[0], HUD_POS_SCOREBOARD[1], 0, 0.0, 8.0, 0.0, 0.0, CH_SCOREBOARD );
     show_hudmessage( 0, Msg );
@@ -486,11 +662,11 @@ public ShowHUDScore()
 */
 readMap()
 {
-    new maps_ini_file[64];
+    new maps_ini_file[64], len;
     
     g_Maps = ArrayCreate( 32 );
-    get_configsdir( maps_ini_file, 63 );
-    format( maps_ini_file, 63, "%s/maps.ini", maps_ini_file );
+    len = get_configsdir( maps_ini_file, 63 );
+    len += formatex( maps_ini_file[len], 63 - len, "/maps.ini" );
     if ( !file_exists( maps_ini_file ) )
         get_cvar_string( "mapcyclefile", maps_ini_file, 63 );
     if ( !file_exists( maps_ini_file ) )
@@ -598,6 +774,7 @@ public eventResetHUD( id )
 //  ┌────────────────────────────┐
 //  │  GENERIC USEFUL FUNCTIONS  │
 //  └────────────────────────────┘
+//      → LoadSettings
 //      → SwapTeam
 //          ├ swap_int ←
 //          └ ServerSay
@@ -613,6 +790,27 @@ public eventResetHUD( id )
 //          ├ {*msgWeapPickup*}
 //          └ {*msgHideWeapon*}
 //==============================================================================
+
+/*
+    This function is used to load plugin config file in directory
+    %CONFIGSDIR%/hustpug/hustpug.cfg
+    
+    @param  none
+    @return none
+*/
+LoadSettings()
+{
+    static fpath[64], len;
+    
+    len = get_configsdir( fpath, 63 );
+    len += formatex( fpath[len], 63 - len, "/%s/%s", PUG_CONFIG_DIR, PUG_CONFIG_FILE );
+    if( file_exists( fpath ) )
+        server_cmd( "exec ^"%s^"", fpath );
+    else
+        ServerSay( "%L", LANG_SERVER, "PUG_PLUGINCFG_NOTFOUND", PUG_CONFIG_FILE );
+        
+    return;
+}
 
 /*
     This function exchange values of two integer variables
@@ -835,7 +1033,7 @@ StripWeapon( id, wid )
 
 /*
     This is function enable/disables most forwards used in warmup time.
-    This is a very important function.
+    This is a very IMPORTANT FUNCTION!!!!!!
     
     @param  bifon       :   true - disable forwards, prepare for MATCH
                             false - enable forwards, prepare for WARMUP
@@ -858,6 +1056,12 @@ SetAllowGrens( bool: bifon )
         // disable WeapPickup message
         unregister_message( g_msgidWeapPickup, g_hmsgWeapPickup );
         unregister_message( g_msgidCurWeapon, g_hmsgCurWeapon );
+        // deal with 5-link forwards
+        if( get_pcvar_num( g_pcEnable5Link ) == 1 ) {
+            g_hfwdSetClientListen = register_forward( FM_Voice_SetClientListening, "fwdSetClListenCl", 0 );
+            EnableHamForward( g_hamPostDeath5Link );
+            EnableHamForward( g_hamFwdSpawn5Link );
+        }
     }
     else {
         server_cmd( "amx_restrict on flash" );
@@ -874,6 +1078,12 @@ SetAllowGrens( bool: bifon )
         // register some messages
         g_hmsgWeapPickup = register_message( g_msgidWeapPickup, "msgWeapPickup" );
         g_hmsgCurWeapon = register_message( g_msgidCurWeapon, "msgCurWeapon" );
+        // deal with 5-link forwards
+        if( get_pcvar_num( g_pcEnable5Link ) == 1 ) {
+            unregister_forward( FM_Voice_SetClientListening, g_hfwdSetClientListen );
+            DisableHamForward( g_hamPostDeath5Link );
+            DisableHamForward( g_hamFwdSpawn5Link );
+        }
     }
     
     return;
@@ -939,7 +1149,7 @@ public DelayRespawn( tskid )
     
     if( is_user_alive( id ) || !is_user_connected( id ) ) return;
     
-    new CsTeams: team = cs_get_user_team( id );
+    new CsTeams: team = g_teamHash[id];
         
     if( team != CS_TEAM_T && team != CS_TEAM_CT ) return;
     
@@ -1470,6 +1680,8 @@ public eventCurWeapon( id )
 */
 public EnterWarm()
 {
+    static fname[32], fpath[64], len;
+    
     // block map objective
     SetMapObjective( false );
     SetBlockRoundTimer( true );
@@ -1488,8 +1700,20 @@ public EnterWarm()
     if( !task_exists( TASKID_SHOWNOTIFY, 0 ) )
         set_task( 20.0, "ShowNotification", TASKID_SHOWNOTIFY, _, _, "b" );
     
-    server_cmd( "exec WarmCfg.cfg" );
-    ServerSay( "%L", LANG_SERVER, "PUG_WARMCFG_LOADED" );
+    get_pcvar_string( g_pcWarmCfg, fname, 31 );
+    len = get_configsdir( fpath, 63 );
+    len += formatex( fpath[len], 63 - len, "/%s/%s", PUG_CONFIG_DIR, fname );
+    if( file_exists( fpath ) ) {  
+        server_cmd( "exec ^"%s^"", fpath );
+        ServerSay( "%L", LANG_SERVER, "PUG_WARMCFG_LOADED", fname );
+    }
+    else if( file_exists( fname ) ) {
+        server_cmd( "exec ^"%s^"", fname );
+        ServerSay( "%L", LANG_SERVER, "PUG_WARMCFG_LOADED", fname );
+    }
+    else
+        ServerSay( "%L", LANG_SERVER, "PUG_CFGNOTFOUND", fname );
+
     server_cmd( "sv_restartround 1" );
     
     return;
@@ -1504,6 +1728,8 @@ public EnterWarm()
 */
 StopWarm()
 {
+    static fname[32], fpath[64], len;
+    
     // recover map objective
     SetMapObjective( true );
     SetBlockRoundTimer( false );
@@ -1515,9 +1741,22 @@ StopWarm()
     
     if( !task_exists( TASKID_SHOWSCORE, 0 ) )
         set_task( 8.0, "ShowHUDScore", TASKID_SHOWSCORE, _, _, "b" );
-    
-    server_cmd( "exec MatchCfg.cfg" );
-    ServerSay( "%L", LANG_SERVER, "PUG_MATCHCFG_LOADED" );
+        
+    // get match parameters
+    g_mMaxRound = get_pcvar_num( g_pcMaxRound );
+    get_pcvar_string( g_pcMatchCfg, fname, 31 );
+    len = get_configsdir( fpath, 63 );
+    len += formatex( fpath[len], 63 - len, "/%s/%s", PUG_CONFIG_DIR, fname );
+    if( file_exists( fpath ) ) {  
+        server_cmd( "exec ^"%s^"", fpath );
+        ServerSay( "%L", LANG_SERVER, "PUG_MATCHCFG_LOADED", fname );
+    }
+    else if( file_exists( fname ) ) {
+        server_cmd( "exec ^"%s^"", fname );
+        ServerSay( "%L", LANG_SERVER, "PUG_MATCHCFG_LOADED", fname );
+    }
+    else
+        ServerSay( "%L", LANG_SERVER, "PUG_CFGNOTFOUND", fname );
     
     return;
 }
@@ -1778,8 +2017,8 @@ MatchWin( CsTeams: team )
 MatchDraw()
 {
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
-    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHDRAW_HUD", 15, 15 );
-    ServerSay( "%L", LANG_SERVER, "PUG_MATCHDRAW_MSG", 15, 15 );
+    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHDRAW_HUD", g_mMaxRound, g_mMaxRound );
+    ServerSay( "%L", LANG_SERVER, "PUG_MATCHDRAW_MSG", g_mMaxRound, g_mMaxRound );
     
     set_task( 5.0, "EnterWarm" );
     
@@ -1803,13 +2042,16 @@ UpdateScore( CsTeams: team, score )
         case STATUS_F_HALF:
             if( score > g_scorebuff[tid] ) {
                 g_Score[tid][0]++;
-                if( g_Score[0][0] + g_Score[1][0] == 15 ) EnterIntermission();
+                if( g_Score[0][0] + g_Score[1][0] == g_mMaxRound ) 
+                    EnterIntermission();
             }
         case STATUS_S_HALF:
             if( score > g_scorebuff[tid] ) {
                 g_Score[tid][1]++;
-                if( g_Score[tid][0] + g_Score[tid][1] == 16 ) MatchWin( team );                
-                if( g_Score[0][0] + g_Score[0][1] == 15 && g_Score[1][0] + g_Score[1][1] == 15 ) 
+                if( g_Score[tid][0] + g_Score[tid][1] == g_mMaxRound + 1 ) 
+                    MatchWin( team );                
+                if( g_Score[0][0] + g_Score[0][1] == g_mMaxRound && 
+                    g_Score[1][0] + g_Score[1][1] == g_mMaxRound ) 
                     MatchDraw();
             }
     }
@@ -2048,10 +2290,10 @@ public HookChooseTeam( id )
                 client_print( id, print_center, "%L", LANG_SERVER, "PUG_CANTTEAMSELECT" );
         }
         else
-            return PLUGIN_CONTINUE;
+            MenuShowTeamMenu( id );
     }
     else
-        return PLUGIN_CONTINUE;
+        MenuShowTeamMenu( id );
     
     return PLUGIN_HANDLED;
 }
@@ -3027,6 +3269,8 @@ public client_disconnect( id )
         case CS_TEAM_CT: g_Cnum--;
     }
     
+    if( g_Tnum * g_Cnum == 0 && StatMatch() ) server_cmd( "hp_forcestop" );
+    
     return PLUGIN_HANDLED;
 }
 
@@ -3035,8 +3279,8 @@ public plugin_cfg()
     g_HudPlRdyPosFlag[0] = 2;
     set_task( 1.0, "CheckHostName" );
     
-    readMap();
-    
+    LoadSettings();
+    readMap();    
     EnterWarm();
     
     return;
@@ -3055,10 +3299,13 @@ public plugin_init()
     g_pcMaxRound        = register_cvar( "hp_maxround", "15" );
     g_pcWarmCfg         = register_cvar( "hp_warmcfg", "WarmCfg.cfg" );
     g_pcMatchCfg        = register_cvar( "hp_matchcfg", "MatchCfg.cfg" );
+    g_pcEnable5Link     = register_cvar( "hp_enable5link", "1" );
+    g_pcLinkTime        = register_cvar( "hp_linktime", "10" );
     
     g_pcAmxShowAct      = get_cvar_pointer( "amx_show_activity" );
     g_pcHostName        = get_cvar_pointer( "hostname" );
     g_pcFreezeTime      = get_cvar_pointer( "mp_freezetime" );
+    g_pcAllTalk         = get_cvar_pointer( "sv_alltalk" );
     
     register_clcmd( "say ready", "PlayerReady", ADMIN_ALL, " - use command to enter ready status" );
     register_clcmd( "say notready", "PlayerUNReady", ADMIN_ALL, " - use command to cancel ready status" );
@@ -3089,6 +3336,8 @@ public plugin_init()
     g_hamPostTouch[0]   = RegisterHam( Ham_Touch, "armoury_entity", "hamPostWeaponTouch", 1 );
     g_hamPostTouch[1]   = RegisterHam( Ham_Touch, "weaponbox", "hamPostWeaponTouch", 1 );
     g_hamPostTouch[2]   = RegisterHam( Ham_Touch, "weapon_shield", "hamPostWeaponTouch", 1 );
+    DisableHamForward( g_hamPostDeath5Link = RegisterHam( Ham_Killed, "player", "hamPostDeath5Link", 1 ) );
+    DisableHamForward( g_hamFwdSpawn5Link = RegisterHam( Ham_Spawn, "player", "hamFwdSpawn5Link", 0 ) );
     
     g_msgidTeamScore    = get_user_msgid( "TeamScore" );
     g_msgidHideWeapon   = get_user_msgid( "HideWeapon" );
