@@ -1,9 +1,10 @@
 [cn]
 TELL_MONEY_TITLE_CT = 反恐精英队伍金钱
 TELL_MONEY_TITLE_T = 恐怖分子队伍金钱
-PUG_WARM_NOTIFY = -=[热身时间]=-^n欢迎来到华中科技大学PUG比赛服务器!^n使用命令say !ready准备, 使用say !notready取消准备, 比赛将在10人准备好后自动开始!^nHave fun! & Good Luck!
+PUG_WARM_NOTIFY = -=[热身时间]=-^n欢迎来到华中科技大学PUG比赛服务器!^n使用命令say ready准备, 使用say notready取消准备, 比赛将在10人准备好后自动开始!^nHave fun! & Good Luck!
 PUG_TEAMSWAP_FINISH = 队伍交换完成!
-PUG_WARMCFG_LOADED = 热身配置文件已经加载!
+PUG_PLUGINCFG_NOTFOUND = **错误! 插件配置文件 %s 没有找到...
+PUG_WARMCFG_LOADED = 热身配置文件 %s 已经加载!
 PUG_RDYLIST_RDYTITLE = 已经准备好的玩家( %d/%d ):^n
 PUG_RDYLIST_URDTITLE = 还未准备好的玩家( %d/%d ):^n
 PUG_KNIFEROUND = 拼刀局
@@ -19,11 +20,12 @@ PUG_CANTUSECMD = 现在不能使用这个命令!
 PUG_CANTRDY = 你不可以使用准备命令!
 PUG_CANTURDY = 你不可以使用取消准备命令!
 PUG_ALREADYRDY = 你已经准备过了!
-PUG_HAVNOTRDY = 你还没有准备! 使用命令say !ready来准备...
+PUG_HAVNOTRDY = 你还没有准备! 使用命令say ready来准备...
 PUG_READYMSG = 玩家 %s 已经准备好了!
 PUG_UREADYMSG = 玩家 %s 已经取消了准备...
 PUG_ALLREADY = 所有玩家都已经准备好了!
-PUG_MATCHCFG_LOADED = 比赛配置文件已经加载...比赛即将开始
+PUG_MATCHCFG_LOADED = 比赛配置文件 %s 已经加载...比赛即将开始
+PUG_CFGNOTFOUND = 加载错误! 配置文件 %s 没有找到...
 PUG_KNIFEROUND_MSG = 拼刀局将在 1 次刷新后开始! 胜者可以选择队伍!
 PUG_KNIFEROUND_STR = [---拼刀局开始---]
 PUG_KNIFEROUND_HUD = ---拼刀局开始---^n---拼刀局开始---^n---拼刀局开始---
@@ -90,6 +92,7 @@ PUG_MENU_MATCHHALFR3 = 强制重新开始当前半场
 PUG_MENU_MATCHRER3 = 强制重新开始整场比赛
 PUG_MENU_MATCHSTOP = 强制停止比赛
 PUG_MENU_MATCHPAUSE = 暂停/继续比赛
+PUG_MENU_MATCHSWAPTEAM = 强制交换双方队伍
 PUG_MENU_MATCHMAP = 更换地图
 PUG_MENU_MATCHKICK = 踢人菜单
 PUG_MENU_MATCHSLAY = 处罚菜单
@@ -133,7 +136,7 @@ HITBOX_MENU_HINT = 游戏中使用 say !sh 命令再次激活强化训练设置�
 [en]
 TELL_MONEY_TITLE_CT = Team money of Counter-Terrorists
 TELL_MONEY_TITLE_T = Team money of Terrorists
-PUG_WARM_NOTIFY = -=[Warmup Time]=-^nWelcome to UofT Pick-Up Game Server!^nUsing 'say !ready' for ready, using 'say !notready' for canceling ready, match will start automatically after 10 readies!^nHave fun! & Good Luck!
+PUG_WARM_NOTIFY = -=[Warmup Time]=-^nWelcome to UofT Pick-Up Game Server!^nUsing 'say ready' for ready, using 'say notready' for canceling ready, match will start automatically after 10 readies!^nHave fun! & Good Luck!
 PUG_TEAMSWAP_FINISH = Team successfully swapped!
 PUG_WARMCFG_LOADED = Warmup time configuration file has been loaded!
 PUG_RDYLIST_RDYTITLE = Players has been ready( %d/%d ):^n
@@ -148,10 +151,10 @@ PUG_CTNAME = Counter-Terrorist
 PUG_TNAME = Terrorist
 PUG_SPECNAME = Spectator
 PUG_CANTUSECMD = You cannot use this command now!
-PUG_CANTRDY = You cannot use !ready command!
-PUG_CANTURDY = You cannot use !notready command!
+PUG_CANTRDY = You cannot use ready command!
+PUG_CANTURDY = You cannot use notready command!
 PUG_ALREADYRDY = You have already been ready!
-PUG_HAVNOTRDY = You are not ready! Use 'say !ready' for ready...
+PUG_HAVNOTRDY = You are not ready! Use 'say ready' for ready...
 PUG_READYMSG = Player %s is now ready!
 PUG_UREADYMSG = Player %s cancelled ready status...
 PUG_MATCHCFG_LOADED = Match config file has been loaded...Match will begin soon
@@ -219,6 +222,7 @@ PUG_MENU_MATCHHALFR3 = Force restart current half
 PUG_MENU_MATCHRER3 = Force restart whole match
 PUG_MENU_MATCHSTOP = Force stop match
 PUG_MENU_MATCHPAUSE = Pause/unpause match
+PUG_MENU_MATCHSWAPTEAM = Force swap team
 PUG_MENU_MATCHMAP = Change map
 PUG_MENU_MATCHKICK = Kick menu
 PUG_MENU_MATCHSLAY = Slap/slay menu

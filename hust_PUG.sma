@@ -18,7 +18,7 @@
 *
 *   │  Changelog: 2016-02-26
 *
-*       1.4a3:  1) add 5-link function to the plugin
+*       1.4:    1) add 5-link function to the plugin
 *               2) improve comments for the code
 *               3) minor code optimization
 *
@@ -87,7 +87,7 @@
 
 
 new const PLUGIN_NAME[]     =   "HUST PUG";
-new const PLUGIN_VERSION[]  =   "1.4a2";
+new const PLUGIN_VERSION[]  =   "1.4";
 new const PLUGIN_AUTHOR[]   =   "real";
 
 // need flag "b" to control the plugin
@@ -788,7 +788,8 @@ public eventResetHUD( id )
 //          ├ {*fwdSetInfiniteBuyTime*}
 //          ├ {*fwdSetModel*}
 //          ├ {*msgWeapPickup*}
-//          └ {*msgHideWeapon*}
+//          ├ {*msgHideWeapon*}
+//          └ {*fwdSetClListen*}
 //==============================================================================
 
 /*
@@ -841,7 +842,7 @@ swap_int( &a, &b )
 */
 public SwapTeam()
 {
-    new i, id, CsTeams: team, wbox;
+    new i, id, CsTeams: team, wbox, st, sc;
     new bool: needtrans = false, transid;
     
     for( i = 0; i < MAX_PLAYERS; i++ ) {
@@ -882,6 +883,28 @@ public SwapTeam()
     swap_int( g_Score[0][0], g_Score[1][0] );
     swap_int( g_Score[0][1], g_Score[1][1] );
     swap_int( g_Tnum, g_Cnum );
+    // fire 2 messages to update scores on scoreboard
+    if( g_StatusNow == STATUS_S_HALF ) {
+        sc = g_Score[1][1];
+        st = g_Score[0][1];
+    }
+    else {
+        sc = g_Score[1][0];
+        st = g_Score[0][0];
+    }
+    message_begin( MSG_ALL, g_msgidTeamScore );
+    {
+        write_string( "TERRORIST" );
+        write_short( st );
+    }
+    message_end();
+    message_begin( MSG_ALL, g_msgidTeamScore );
+    {
+        write_string( "CT" );
+        write_short( sc );
+    }
+    message_end();
+    if( task_exists( TASKID_SHOWSCORE, 0 ) ) ShowHUDScore();
     
     ServerSay( "%L", LANG_SERVER, "PUG_TEAMSWAP_FINISH" );
     
@@ -1308,7 +1331,7 @@ public RemoveProtect( tskid )
 */
 public msgWeapPickup( msgid, idest, id )
 {
-    if( g_WarmWeapon[id][1] == 0 ) return PLUGIN_CONTINUE;
+    if( !is_user_alive( id ) || g_WarmWeapon[id][1] == 0 ) return PLUGIN_CONTINUE;
     
     new wid = ( g_WarmWeapon[id][1] >> 2 );
     new msgwid = get_msg_arg_int( 1 );
@@ -1635,7 +1658,7 @@ AutoStart( bool: force, ifKnife )
 //      → EnterFirstHalf
 //          └ R3Function ←
 //              └ ScrollServerSay ←
-//      → eventTeamScore
+//      → msgTeamScore
 //          ├ UpdateScore ←
 //          │   ├ EnterIntermission ←
 //          │   │   ├ SwapTeam
@@ -1651,7 +1674,6 @@ AutoStart( bool: force, ifKnife )
 //          │       └ EnterWarm ←
 //          └ KnifeRoundWon ←
 //              └ ShowPickTeamMenu
-//      → msgTeamScore
 //==============================================================================
 
 /*
@@ -2032,21 +2054,24 @@ MatchDraw()
     
     @param  team        :   team ID of scored team
     @param  score       :   score of corresponding team
-    @return none
+    @return bool        :   if team has scored in last round
 */
-UpdateScore( CsTeams: team, score )
+bool: UpdateScore( CsTeams: team, score )
 {
     new tid = _:( team ) - 1;
+    new bool: bIfScored = false;
     
     switch( g_StatusNow ) {
         case STATUS_F_HALF:
             if( score > g_scorebuff[tid] ) {
+                bIfScored = true;
                 g_Score[tid][0]++;
                 if( g_Score[0][0] + g_Score[1][0] == g_mMaxRound ) 
                     EnterIntermission();
             }
         case STATUS_S_HALF:
             if( score > g_scorebuff[tid] ) {
+                bIfScored = true;
                 g_Score[tid][1]++;
                 if( g_Score[tid][0] + g_Score[tid][1] == g_mMaxRound + 1 ) 
                     MatchWin( team );                
@@ -2057,65 +2082,47 @@ UpdateScore( CsTeams: team, score )
     }
     g_scorebuff[tid] = score;
     
-    return;
-}
-   
-/*
-    This function hooks the event "TeamScore" and calls UpdateScore to update
-    scores for both teams.
-    
-    register_event( "TeamScore", "eventTeamScore", "a" )
-    
-    @param  none
-    @return none
-*/ 
-public eventTeamScore()
-{
-    static name[2], score, CsTeams: team;
-    
-    read_data( 1, name, 1 );
-    score = read_data( 2 );
-    
-    if( name[0] == 'C' )
-        team = CS_TEAM_CT;
-    else
-        team = CS_TEAM_T;
-    
-    switch( g_StatusNow ) {
-        case STATUS_KNIFE: if( score > 0 ) KnifeRoundWon( team );
-        case STATUS_F_HALF, STATUS_S_HALF: UpdateScore( team, score );
-    }
-    if( StatLive() ) ShowHUDScore();
-    
-    return PLUGIN_CONTINUE;
+    return bIfScored;
 }
 
 /*
     This function hooks the message "TeamScore" and put the correct team score
-    onto the TAB scoreboard.
+    onto the TAB scoreboard. It also update the score in match.
     
     register_message( g_msgidTeamScore, "msgTeamScore" )
     
     @param  none
     @return none
 */ 
-public msgTeamScore()
+public msgTeamScore( msgid, idest, id )
 {
-    if( !StatMatch() ) return PLUGIN_CONTINUE;
+    if( idest != MSG_ALL || !StatMatch() ) return PLUGIN_CONTINUE;
     
-    static teamname[16], buff[2], tindex;
+    static teamname[2], score, buff, tindex, CsTeams: team;
+    new bool: bIfScored = false;
     
-    get_msg_arg_string( 1, teamname, 15 );
-    if( g_StatusNow == STATUS_S_HALF ) {
-        buff[0] = g_Score[0][1];
-        buff[1] = g_Score[1][1];
-    }
-    else {
-        buff[0] = g_Score[0][0];
-        buff[1] = g_Score[1][0];
-    }
+    get_msg_arg_string( 1, teamname, 2 );
+    score = get_msg_arg_int( 2 );
     tindex = _:( teamname[0] == 'C' );
-    set_msg_arg_int( 2, ARG_SHORT, buff[tindex] );
+    team = CsTeams:( tindex + 1 );
+    switch( g_StatusNow ) {
+        case STATUS_KNIFE: 
+            if( score > 0 ) {
+                KnifeRoundWon( team );
+                buff = g_Score[tindex][0];
+            }
+        case STATUS_F_HALF: {
+            bIfScored = UpdateScore( team, score );
+            buff = g_Score[tindex][0];
+        }
+        case STATUS_S_HALF: {
+            bIfScored = UpdateScore( team, score );
+            buff = g_Score[tindex][1];
+        }
+        default: buff = g_Score[tindex][0];
+    }
+    set_msg_arg_int( 2, ARG_SHORT, buff );
+    if( bIfScored ) ShowHUDScore();
     
     return PLUGIN_CONTINUE;
 }
@@ -2836,7 +2843,7 @@ public MenuJudgeVoteMap()
 
 public DelayChangelevel( const mapname[] )
 {
-    server_cmd( "amx_map %s", mapname );
+    server_cmd( "amx_map ^"%s^"", mapname );
     
     return;
 }
@@ -3001,12 +3008,12 @@ public MenuShowPlayerMenu( id )
     formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHBAN" );
     szid[0] = 0x30 + 9;
     menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
+    menu_addblank( hMenu, 0 );
     formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_EXITNAME" );
-    menu_setprop( hMenu, MPROP_EXITNAME, Msg );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_NEXTPAGE" );
-    menu_setprop( hMenu, MPROP_NEXTNAME, Msg );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PREVPAGE" );
-    menu_setprop( hMenu, MPROP_BACKNAME, Msg );
+    szid[0] = 0x30;
+    menu_additem( hMenu, Msg, szid, ADMIN_ALL );
+    menu_setprop( hMenu, MPROP_PERPAGE, 0 );
+
     menu_display( id, hMenu, 0 );
     
     return PLUGIN_HANDLED;
@@ -3020,8 +3027,6 @@ public MenucmdPlayerMenu( id, menu, item )
     menu_item_getinfo( menu, item, _access, voted, 31, kicker, 31, item_callback );
     menu_destroy( menu );
     tid = str_to_num( voted );
-    
-    if( item == MENU_EXIT ) return;
     
     switch( tid ) {
         case 1: MenuShowVoteMap( id );
@@ -3325,7 +3330,6 @@ public plugin_init()
     register_concmd( "hp_forcestop", "ForceStop", PLUGIN_ACCESS, " - use this command to force the game stop and enter warm section" );
     register_concmd( "hp_forceswap", "ForceSwap", PLUGIN_ACCESS, " - use this command to force team swap" );
     
-    register_event( "TeamScore", "eventTeamScore", "a" );
     register_event( "CurWeapon", "eventCurWeapon", "be", "1=0", "2=29" );
     register_event( "HLTV", "eventNewRoundStart", "a", "1=0", "2=0" );
     register_event( "ResetHUD", "eventResetHUD", "b" );
@@ -3336,8 +3340,8 @@ public plugin_init()
     g_hamPostTouch[0]   = RegisterHam( Ham_Touch, "armoury_entity", "hamPostWeaponTouch", 1 );
     g_hamPostTouch[1]   = RegisterHam( Ham_Touch, "weaponbox", "hamPostWeaponTouch", 1 );
     g_hamPostTouch[2]   = RegisterHam( Ham_Touch, "weapon_shield", "hamPostWeaponTouch", 1 );
-    DisableHamForward( g_hamPostDeath5Link = RegisterHam( Ham_Killed, "player", "hamPostDeath5Link", 1 ) );
-    DisableHamForward( g_hamFwdSpawn5Link = RegisterHam( Ham_Spawn, "player", "hamFwdSpawn5Link", 0 ) );
+    g_hamPostDeath5Link = RegisterHam( Ham_Killed, "player", "hamPostDeath5Link", 1 );
+    g_hamFwdSpawn5Link  = RegisterHam( Ham_Spawn, "player", "hamFwdSpawn5Link", 0 );
     
     g_msgidTeamScore    = get_user_msgid( "TeamScore" );
     g_msgidHideWeapon   = get_user_msgid( "HideWeapon" );
