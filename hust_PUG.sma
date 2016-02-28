@@ -224,6 +224,10 @@ const   HW_HIDE_TIMER_FLAG  =   ( 1 << 4 );
 // global variable to record status now
 new     g_StatusNow;
 
+// global message strings
+new     g_szHUDScore[256];                      // string of HUD score
+new     g_szReadyList[1024];                    // string of ready list
+
 // array to record ready status of players
 new     bool: g_ready[MAX_PLAYERS + 1];         // array to save ready state of players
 new     g_name[MAX_PLAYERS + 1][32];            // array to save name of players
@@ -569,7 +573,7 @@ ServerSay( const fmt[], any:... )
     @param  none
     @return none
 */
-public ShowReadyList()
+public ShowReadyList( const index[] )
 {
     new i, id, CsTeams: team, itot, iurdy;
     new len1, len2;
@@ -596,7 +600,7 @@ public ShowReadyList()
             len2 += formatex( urdymsg[len2], 511 - len2, "%s%s^n", teamtag, name );
     }
     set_hudmessage( 0x00, 0xff, 0x00, HUD_POS_RDYLIST[0], HUD_POS_RDYLIST[1], 0, 0.0, 7.8, 0.1, 0.1, CH_RDYLIST );
-    show_hudmessage( 0, "%s^n%s", rdymsg, urdymsg );
+    show_hudmessage( index[0], "%s^n%s", rdymsg, urdymsg );
     
     return;
 }
@@ -613,10 +617,10 @@ public ShowReadyList()
     @param  none
     @return none
 */
-public ShowNotification()
+public ShowNotification( const index[] )
 {
     set_hudmessage( 0x00, 0xff, 0xff, HUD_POS_NOTIFY[0], HUD_POS_NOTIFY[1], 0, 0.0, 19.8, 0.1, 0.1, CH_NOTIFY );
-    show_hudmessage( 0, "%L", LANG_SERVER, "PUG_WARM_NOTIFY" );
+    show_hudmessage( index[0], "%L", LANG_SERVER, "PUG_WARM_NOTIFY" );
     
     return;
 }
@@ -633,7 +637,7 @@ public ShowNotification()
     @param  none
     @return none
 */
-public ShowHUDScore()
+public ShowHUDScore( const index[] )
 {
     static Msg[256], len;
     new St = g_Score[0][0] + g_Score[0][1];
@@ -649,7 +653,7 @@ public ShowHUDScore()
     len += formatex( Msg[len], 255 - len, " %L", LANG_SERVER, "PUG_MATCHPROC", tt, 2 * g_mMaxRound );
     len += formatex( Msg[len], 255 - len, "^n%L", LANG_SERVER, "PUG_SCOREBOARD", St, Sc );
     set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_SCOREBOARD[0], HUD_POS_SCOREBOARD[1], 0, 0.0, 8.0, 0.0, 0.0, CH_SCOREBOARD );
-    show_hudmessage( 0, Msg );
+    show_hudmessage( index[0], Msg );
     
     return;
 }
@@ -757,14 +761,25 @@ public ShowTeamMoney()
 */
 public eventResetHUD( id )
 {
-    if( StatMatch() )
-        ShowHUDScore();
-    else {        
-        message_begin( MSG_ONE, g_msgidHideWeapon, _, id );
-        {
-            write_byte( HW_HIDE_TIMER_FLAG );
+    static index[2];
+    index[0] = id;
+    
+    switch( g_StatusNow ) {
+        case STATUS_WARM: {
+            message_begin( MSG_ONE, g_msgidHideWeapon, _, id );
+            {
+                write_byte( HW_HIDE_TIMER_FLAG );
+            }
+            message_end();
+            ShowReadyList( index );
+            ShowNotification( index );
         }
-        message_end();
+        case STATUS_F_HALF, STATUS_S_HALF: 
+            ShowHUDScore( index );
+        case STATUS_INTER: {
+            ShowHUDScore( index );
+            ShowReadyList( index );
+        }
     }
 
     return;
@@ -904,7 +919,7 @@ public SwapTeam()
         write_short( sc );
     }
     message_end();
-    if( task_exists( TASKID_SHOWSCORE, 0 ) ) ShowHUDScore();
+    if( task_exists( TASKID_SHOWSCORE, 0 ) ) ShowHUDScore( { 0 } );
     
     ServerSay( "%L", LANG_SERVER, "PUG_TEAMSWAP_FINISH" );
     
@@ -1516,12 +1531,14 @@ public fwdSetInfiniteBuyTime( const szcvar[] )
 //  └─────────────────────────────────────┘
 //      → PlayerReady
 //          ├ findHUDPos
+//          ├ ShowReadyList
 //          └ AutoStart ←
 //              ├ StopWarm
 //              ├ EnterKnifeRound
 //              ├ EnterFirstHalf
 //              └ EnterSecondHalf
 //      → PlayerUNReady
+//          ├ ShowReadyList
 //          └ findHUDPos
 //==============================================================================
 
@@ -1563,6 +1580,7 @@ public PlayerReady( id )
     set_dhudmessage( 0xff, 0xff, 0xff, HUD_POS_PLRDY[0], HUD_POS_PLRDY[1] + findHUDPos(), 2, 2.0, 4.8, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_READYMSG", g_name[id] );
         
+    ShowReadyList( { 0 } );
     AutoStart( false, -1 );
     
     return PLUGIN_HANDLED;
@@ -1591,6 +1609,8 @@ public PlayerUNReady( id )
     
     set_dhudmessage( 0xff, 0x55, 0x55, HUD_POS_PLRDY[0], HUD_POS_PLRDY[1] + findHUDPos(), 2, 2.0, 4.8, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_UREADYMSG", g_name[id] );
+    
+    ShowReadyList( { 0 } );
     
     return PLUGIN_HANDLED;
 }
@@ -1718,9 +1738,9 @@ public EnterWarm()
     remove_task( TASKID_SHOWSCORE, 0 );
     
     if( !task_exists( TASKID_SHOWREADY, 0 ) )
-        set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, _, _, "b" );
+        set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, { 0 }, 1, "b" );
     if( !task_exists( TASKID_SHOWNOTIFY, 0 ) )
-        set_task( 20.0, "ShowNotification", TASKID_SHOWNOTIFY, _, _, "b" );
+        set_task( 20.0, "ShowNotification", TASKID_SHOWNOTIFY, { 0 }, 1, "b" );
     
     get_pcvar_string( g_pcWarmCfg, fname, 31 );
     len = get_configsdir( fpath, 63 );
@@ -1962,7 +1982,7 @@ EnterIntermission()
         case 1: {
             InitPlayerInfo();
             if( !task_exists( TASKID_SHOWREADY, 0 ) )
-                set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, _, _, "b" );
+                set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, { 0 }, 1, "b" );
             g_StatusNow = STATUS_INTER;
         }
     }
@@ -2122,7 +2142,7 @@ public msgTeamScore( msgid, idest, id )
         default: buff = g_Score[tindex][0];
     }
     set_msg_arg_int( 2, ARG_SHORT, buff );
-    if( bIfScored ) ShowHUDScore();
+    if( bIfScored ) ShowHUDScore( { 0 } );
     
     return PLUGIN_CONTINUE;
 }
@@ -3333,7 +3353,7 @@ public plugin_init()
     register_event( "CurWeapon", "eventCurWeapon", "be", "1=0", "2=29" );
     register_event( "HLTV", "eventNewRoundStart", "a", "1=0", "2=0" );
     register_event( "ResetHUD", "eventResetHUD", "b" );
-    register_event( "TeamInfo", "eventTeamInfo", "a" );
+    register_event( "TeamInfo", "eventTeamInfo", "a", "2=CT", "2=TERRORIST" );
     
     g_hamPostSpawn      = RegisterHam( Ham_Spawn, "player", "hamPostPlayerSpawn", 1 );
     g_hamFwdDeath       = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 );
