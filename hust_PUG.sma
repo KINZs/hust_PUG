@@ -127,7 +127,7 @@ const   CH_COUNTDOWN        =   4;
 const   CH_5LINK            =   2;
 
 // HUD message positions
-new const Float: HUD_POS_RDYLIST[]      =   { 0.05, 0.2 };
+new const Float: HUD_POS_RDYLIST[]      =   { 0.7, 0.2 };
 new const Float: HUD_POS_NOTIFY[]       =   { -1.0, 0.0 };
 new const Float: HUD_POS_SCOREBOARD[]   =   { -1.0, 0.0 };
 new const Float: HUD_POS_SHOWMONEY[]    =   { 0.6, 0.2 };
@@ -136,6 +136,11 @@ new const Float: HUD_POS_PLRDY[]        =   { -1.0, 0.55 };
 new const Float: HUD_POS_MATCHNOT[]     =   { -1.0, 0.4 };
 new const Float: HUD_POS_ACT[]          =   { -1.0, 0.3 };
 new const Float: HUD_POS_5LINK[]        =   { -1.0, 0.8 };
+    
+// HUD message interval
+new const Float: HUD_INT_RDYLIST        =   10.0;
+new const Float: HUD_INT_SCOREBOARD     =   10.0;
+new const Float: HUD_INT_NOTIFY         =   20.0;
     
 new g_HudPlRdyPosFlag[10];      // array to record available HUD display position
 
@@ -226,7 +231,7 @@ new     g_StatusNow;
 
 // global message strings
 new     g_szHUDScore[256];                      // string of HUD score
-new     g_szReadyList[1024];                    // string of ready list
+new     g_szReadyList[512];                     // string of ready list
 
 // array to record ready status of players
 new     bool: g_ready[MAX_PLAYERS + 1];         // array to save ready state of players
@@ -273,6 +278,7 @@ new     g_msgidHideWeapon;      // message id for "HideWeapon" Msg
 new     g_msgidRoundTime;       // message id for "RoundTime" Msg
 new     g_msgidWeapPickup;      // message id for "WeapPickup" Msg
 new     g_msgidCurWeapon;       // message id for "CurWeapon" Msg
+new     g_msgidTeamInfo;        // message id for "TeamInfo" Msg
 
 // some message handles
 new     g_hmsgHideWeapon;       // handle for registered message "HideWeapon"
@@ -303,6 +309,9 @@ new     g_kickid, g_kickagree;          // player who is being vote kicked
 new     g_mPickTeam;                    // pickteam menu count
 
 new     g_hostname[32];                 // hostname of server
+
+// Game Time
+new     Float: g_GameTime;              // global variable to get game time
 
 //====GLOBAL VAR DEFINITION FINISHED============================================
 
@@ -469,9 +478,13 @@ public fwdSetClListen( receiver, sender, bool: bListen )
 //      → findHUDPos
 //      → ServerSay
 //          └ client_print_color *
-//      → ShowReadyList
+//      → FireMsgTeamInfo
+//      → FireMsgTeamScore
+//      → RefreshReadyList
+//          └ ShowReadyList ←
 //      → ShowNotification
-//      → ShowHUDScore
+//      → RefreshHUDScore
+//          └ ShowHUDScore ←
 //      → readMap
 //      → ShowTeamMoney
 //      → eventResetHUD
@@ -522,7 +535,7 @@ Float: findHUDPos()
             g_HudPlRdyPosFlag[i] |= 1;
             para[0] = i;
             para[1] = 0;
-            set_task( 7.5, "ClearHUDPos", _, para, 2 );
+            set_task( 4.5, "ClearHUDPos", _, para, 2 );
             
             return 0.05 * i;
         }
@@ -562,18 +575,62 @@ ServerSay( const fmt[], any:... )
 }
 
 /*
-    This function shows a list under radar to indicate "ready" and "unready"
-    player list. The list uses normal HUD system.
+    This function fires a public message TeamInfo to indicate team change of
+    player.
     
-    HUD params:
-        ├ CHANNEL:    CH_RDYLIST
-        ├ POSITION:   HUD_POS_RDYLIST[]
-        └ COLOR:      #00FF00 (green)
+    @param  id          :   index of player
+    @param  team        :   team of player
+    @return none
+*/
+FireMsgTeamInfo( id, CsTeams: team )
+{
+    message_begin( MSG_ALL, g_msgidTeamInfo );
+    {
+        write_byte( id );
+        switch( team ) {
+            case CS_TEAM_UNASSIGNED:    write_string( "UNASSIGNED" );
+            case CS_TEAM_T         :    write_string( "TERRORIST" );
+            case CS_TEAM_CT        :    write_string( "CT" );
+            case CS_TEAM_SPECTATOR :    write_string( "SPECTATOR" );
+        }
+    }
+    message_end();
+    
+    return;
+}
+
+/*
+    This function fires a public message TeamScore to indicate team change of
+    team scores.
+    
+    @param  team        :   team id
+    @param  score       :   team score
+    @return none
+*/
+FireMsgTeamScore( CsTeams: team, score )
+{
+    message_begin( MSG_ALL, g_msgidTeamScore );
+    {
+        switch( team ) {
+            case CS_TEAM_T  :   write_string( "TERRORIST" );
+            case CS_TEAM_CT :   write_string( "CT" );
+        }
+        write_short( score );
+    }
+    message_end();
+    
+    return;
+}
+
+/*
+    This function updates the player information instantly.
+    This function will be called after player using "jointeam" or "chooseteam"
+    command with 0.1sec delay to fix display bug of readylist.
     
     @param  none
     @return none
 */
-public ShowReadyList( const index[] )
+public RefreshReadyList()
 {
     new i, id, CsTeams: team, itot, iurdy;
     new len1, len2;
@@ -599,8 +656,29 @@ public ShowReadyList( const index[] )
         else
             len2 += formatex( urdymsg[len2], 511 - len2, "%s%s^n", teamtag, name );
     }
-    set_hudmessage( 0x00, 0xff, 0x00, HUD_POS_RDYLIST[0], HUD_POS_RDYLIST[1], 0, 0.0, 7.8, 0.1, 0.1, CH_RDYLIST );
-    show_hudmessage( index[0], "%s^n%s", rdymsg, urdymsg );
+    formatex( g_szReadyList, charsmax( g_szReadyList ), "%s^n%s", rdymsg, urdymsg );
+    
+    ShowReadyList( { 0 } );
+    
+    return;
+}
+
+/*
+    This function shows a list under radar to indicate "ready" and "unready"
+    player list. The list uses normal HUD system.
+    
+    HUD params:
+        ├ CHANNEL:    CH_RDYLIST
+        ├ POSITION:   HUD_POS_RDYLIST[]
+        └ COLOR:      #FFFF00 (yellow)
+    
+    @param  none
+    @return none
+*/
+public ShowReadyList( const index[] )
+{
+    set_hudmessage( 0xff, 0xff, 0x00, HUD_POS_RDYLIST[0], HUD_POS_RDYLIST[1], 0, 0.0, HUD_INT_RDYLIST, 0.0, 0.0, CH_RDYLIST );
+    show_hudmessage( index[0], "%s", g_szReadyList );
     
     return;
 }
@@ -619,8 +697,37 @@ public ShowReadyList( const index[] )
 */
 public ShowNotification( const index[] )
 {
-    set_hudmessage( 0x00, 0xff, 0xff, HUD_POS_NOTIFY[0], HUD_POS_NOTIFY[1], 0, 0.0, 19.8, 0.1, 0.1, CH_NOTIFY );
+    set_hudmessage( 0x00, 0xff, 0xff, HUD_POS_NOTIFY[0], HUD_POS_NOTIFY[1], 0, 0.0, HUD_INT_NOTIFY, 0.0, 0.0, CH_NOTIFY );
     show_hudmessage( index[0], "%L", LANG_SERVER, "PUG_WARM_NOTIFY" );
+    
+    return;
+}
+
+/*
+    This function updates the HUD scoreboard information instantly.
+    This function will be called every time when a team scores or game progress
+    changed.
+    
+    @param  none
+    @return none
+*/
+public RefreshHUDScore()
+{
+    static len;
+    new maxl = charsmax( g_szHUDScore );
+    new St = g_Score[0][0] + g_Score[0][1];
+    new Sc = g_Score[1][0] + g_Score[1][1];
+    
+    switch( g_StatusNow ) {
+        case STATUS_KNIFE: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_KNIFEROUND" );
+        case STATUS_F_HALF: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_F_HALF" );
+        case STATUS_S_HALF: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_S_HALF" );
+        case STATUS_INTER: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_INTER" );    
+    }
+    len += formatex( g_szHUDScore[len], maxl - len, " %L", LANG_SERVER, "PUG_MATCHPROC", g_RoundNum, 2 * g_mMaxRound );
+    len += formatex( g_szHUDScore[len], maxl - len, "^n%L", LANG_SERVER, "PUG_SCOREBOARD", St, Sc );
+    
+    ShowHUDScore( { 0 } );
     
     return;
 }
@@ -639,21 +746,8 @@ public ShowNotification( const index[] )
 */
 public ShowHUDScore( const index[] )
 {
-    static Msg[256], len;
-    new St = g_Score[0][0] + g_Score[0][1];
-    new Sc = g_Score[1][0] + g_Score[1][1];
-    new tt = g_RoundNum;
-    
-    switch( g_StatusNow ) {
-        case STATUS_KNIFE: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_KNIFEROUND" );
-        case STATUS_F_HALF: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_F_HALF" );
-        case STATUS_S_HALF: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_S_HALF" );
-        case STATUS_INTER: len = formatex( Msg, 255, "%L", LANG_SERVER, "PUG_INTER" );    
-    }
-    len += formatex( Msg[len], 255 - len, " %L", LANG_SERVER, "PUG_MATCHPROC", tt, 2 * g_mMaxRound );
-    len += formatex( Msg[len], 255 - len, "^n%L", LANG_SERVER, "PUG_SCOREBOARD", St, Sc );
-    set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_SCOREBOARD[0], HUD_POS_SCOREBOARD[1], 0, 0.0, 8.0, 0.0, 0.0, CH_SCOREBOARD );
-    show_hudmessage( index[0], Msg );
+    set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_SCOREBOARD[0], HUD_POS_SCOREBOARD[1], 0, 0.0, HUD_INT_SCOREBOARD, 0.0, 0.0, CH_SCOREBOARD );
+    show_hudmessage( index[0], g_szHUDScore );
     
     return;
 }
@@ -774,8 +868,10 @@ public eventResetHUD( id )
             ShowReadyList( index );
             ShowNotification( index );
         }
-        case STATUS_F_HALF, STATUS_S_HALF: 
-            ShowHUDScore( index );
+        case STATUS_F_HALF, STATUS_S_HALF: {
+            new Float: time = get_gametime();
+            if( time - g_GameTime > 1.0 ) ShowHUDScore( index );
+        }
         case STATUS_INTER: {
             ShowHUDScore( index );
             ShowReadyList( index );
@@ -888,6 +984,7 @@ public SwapTeam()
             }
         }
     }
+    if( !StatLive() ) RefreshReadyList();
     // finish C4 transfer if needed
     if( needtrans ) {
         set_pev( wbox, pev_flags, pev( wbox, pev_flags) | FL_ONGROUND );
@@ -907,19 +1004,9 @@ public SwapTeam()
         sc = g_Score[1][0];
         st = g_Score[0][0];
     }
-    message_begin( MSG_ALL, g_msgidTeamScore );
-    {
-        write_string( "TERRORIST" );
-        write_short( st );
-    }
-    message_end();
-    message_begin( MSG_ALL, g_msgidTeamScore );
-    {
-        write_string( "CT" );
-        write_short( sc );
-    }
-    message_end();
-    if( task_exists( TASKID_SHOWSCORE, 0 ) ) ShowHUDScore( { 0 } );
+    FireMsgTeamScore( CS_TEAM_T, st );
+    FireMsgTeamScore( CS_TEAM_CT, sc );
+    if( task_exists( TASKID_SHOWSCORE, 0 ) ) RefreshHUDScore();
     
     ServerSay( "%L", LANG_SERVER, "PUG_TEAMSWAP_FINISH" );
     
@@ -953,46 +1040,10 @@ bool: StatMatch() {
 */
 InitPlayerInfo()
 {
-    static tplayer[MAX_PLAYERS];
-    new i, id, t, CsTeams: team;
-    
-    g_rdy = g_Tnum = g_Cnum = 0;
+    g_rdy = 0;
     arrayset( g_ready, false, sizeof( g_ready ) );
-    arrayset( _:( g_teamHash ), 0, sizeof( g_teamHash ) );
-    get_players( tplayer, t, "h" );
-    for( i = 0; i < t; i++ ) {
-        id = tplayer[i];
-        team = cs_get_user_team( id );
-        g_teamHash[id] = team ;
-        get_user_name( id, g_name[id], 31 );
-        switch( team ) {
-            case CS_TEAM_T: g_Tnum++;
-            case CS_TEAM_CT: g_Cnum++;
-        }
-    }
-    
-    return;
-}
 
-/*
-    This function updates the player information instantly.
-    This function will be called after player using "jointeam" or "chooseteam"
-    command with 0.1sec delay to fix display bug of readylist.
-    
-    @param  none
-    @return none
-*/
-public RefreshReadyList()
-{
-    new i, id, CsTeams: oldteam, CsTeams: nowteam;
-        
-    for( i = 0; i < MAX_PLAYERS; i++ ) {
-        id = i + 1;
-        if( !is_user_connected( id ) ) continue;
-        oldteam = g_teamHash[id];
-        nowteam = cs_get_user_team( id );
-        if( oldteam != nowteam ) PutPlayer( id, oldteam, nowteam ); 
-    }
+    RefreshReadyList();
     
     return;
 }
@@ -1163,9 +1214,24 @@ SetAllowGrens( bool: bifon )
 */
 public eventTeamInfo()
 {
-    if( StatMatch() ) return;
-    
+    static tname[2], CsTeams: team, CsTeams: oteam;
+    read_data( 2, tname, 1 );
     new id = read_data( 1 );
+    
+    switch( tname[0] ) {
+        case 'U': team = CS_TEAM_UNASSIGNED;
+        case 'T': team = CS_TEAM_T;
+        case 'C': team = CS_TEAM_CT;
+        case 'S': team = CS_TEAM_SPECTATOR;
+    }
+    oteam = g_teamHash[id];
+    if( oteam != team ) {
+        PutPlayer( id, oteam, team );
+        if( team == CS_TEAM_T || team == CS_TEAM_CT || !StatLive() ) 
+            RefreshReadyList();
+    }
+    
+    if( StatMatch() ) return;
     
     set_task( 0.5, "DelayRespawn", id + OFFSET_RSP );
     
@@ -1577,10 +1643,10 @@ public PlayerReady( id )
         g_rdy++;
     }    
     
-    set_dhudmessage( 0xff, 0xff, 0xff, HUD_POS_PLRDY[0], HUD_POS_PLRDY[1] + findHUDPos(), 2, 2.0, 4.8, 0.1, 0.1 );
+    set_dhudmessage( 0xff, 0xff, 0xff, HUD_POS_PLRDY[0], HUD_POS_PLRDY[1] + findHUDPos(), 0, 0.0, 2.8, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_READYMSG", g_name[id] );
         
-    ShowReadyList( { 0 } );
+    RefreshReadyList();
     AutoStart( false, -1 );
     
     return PLUGIN_HANDLED;
@@ -1607,10 +1673,10 @@ public PlayerUNReady( id )
         g_rdy--;
     }
     
-    set_dhudmessage( 0xff, 0x55, 0x55, HUD_POS_PLRDY[0], HUD_POS_PLRDY[1] + findHUDPos(), 2, 2.0, 4.8, 0.1, 0.1 );
+    set_dhudmessage( 0xff, 0x55, 0x55, HUD_POS_PLRDY[0], HUD_POS_PLRDY[1] + findHUDPos(), 0, 0.0, 2.8, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_UREADYMSG", g_name[id] );
     
-    ShowReadyList( { 0 } );
+    RefreshReadyList();
     
     return PLUGIN_HANDLED;
 }
@@ -1738,9 +1804,9 @@ public EnterWarm()
     remove_task( TASKID_SHOWSCORE, 0 );
     
     if( !task_exists( TASKID_SHOWREADY, 0 ) )
-        set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, { 0 }, 1, "b" );
+        set_task( HUD_INT_RDYLIST, "ShowReadyList", TASKID_SHOWREADY, { 0 }, 1, "b" );
     if( !task_exists( TASKID_SHOWNOTIFY, 0 ) )
-        set_task( 20.0, "ShowNotification", TASKID_SHOWNOTIFY, { 0 }, 1, "b" );
+        set_task( HUD_INT_NOTIFY, "ShowNotification", TASKID_SHOWNOTIFY, { 0 }, 1, "b" );
     
     get_pcvar_string( g_pcWarmCfg, fname, 31 );
     len = get_configsdir( fpath, 63 );
@@ -1782,7 +1848,7 @@ StopWarm()
     remove_task( TASKID_SHOWNOTIFY, 0 );
     
     if( !task_exists( TASKID_SHOWSCORE, 0 ) )
-        set_task( 8.0, "ShowHUDScore", TASKID_SHOWSCORE, _, _, "b" );
+        set_task( HUD_INT_SCOREBOARD, "ShowHUDScore", TASKID_SHOWSCORE, { 0 }, 1, "b" );
         
     // get match parameters
     g_mMaxRound = get_pcvar_num( g_pcMaxRound );
@@ -1812,6 +1878,7 @@ StopWarm()
 public EnterKnifeRound()
 {
     g_StatusNow = STATUS_KNIFE;
+    g_GameTime = get_gametime();
     
     g_Score[0][0] = g_Score[0][1] = g_Score[1][0] = g_Score[1][1] = 0;
     ServerSay( "%L", LANG_SERVER, "PUG_KNIFEROUND_MSG" );
@@ -1982,7 +2049,7 @@ EnterIntermission()
         case 1: {
             InitPlayerInfo();
             if( !task_exists( TASKID_SHOWREADY, 0 ) )
-                set_task( 8.0, "ShowReadyList", TASKID_SHOWREADY, { 0 }, 1, "b" );
+                set_task( HUD_INT_RDYLIST, "ShowReadyList", TASKID_SHOWREADY, { 0 }, 1, "b" );
             g_StatusNow = STATUS_INTER;
         }
     }
@@ -2128,8 +2195,11 @@ public msgTeamScore( msgid, idest, id )
     switch( g_StatusNow ) {
         case STATUS_KNIFE: 
             if( score > 0 ) {
-                KnifeRoundWon( team );
-                buff = g_Score[tindex][0];
+                new Float: time = get_gametime();
+                if( time - g_GameTime > 3.0 ) {
+                    KnifeRoundWon( team );
+                    buff = g_Score[tindex][0];
+                }
             }
         case STATUS_F_HALF: {
             bIfScored = UpdateScore( team, score );
@@ -2142,7 +2212,7 @@ public msgTeamScore( msgid, idest, id )
         default: buff = g_Score[tindex][0];
     }
     set_msg_arg_int( 2, ARG_SHORT, buff );
-    if( bIfScored ) ShowHUDScore( { 0 } );
+    if( bIfScored ) RefreshHUDScore();
     
     return PLUGIN_CONTINUE;
 }
@@ -2158,8 +2228,9 @@ public msgTeamScore( msgid, idest, id )
 */ 
 public eventNewRoundStart()
 {
+    g_GameTime = get_gametime();
     // update round num
-    UpdateRoundNum();
+    if( StatLive() ) UpdateRoundNum();
     // Show Team Money at round start
     if( StatLive() && get_pcvar_num( g_pcShowMoney ) == 1 ) 
         set_task( 0.1, "ShowTeamMoney" );
@@ -2184,6 +2255,7 @@ UpdateRoundNum()
         default: 
             g_RoundNum = 0;
     }
+    RefreshHUDScore();
     
     return;
 }
@@ -2378,7 +2450,6 @@ public PlayerJoin( id )
             return PLUGIN_HANDLED;
         }
     }
-    set_task( 0.1, "RefreshReadyList" );
     
     return PLUGIN_HANDLED;
 }
@@ -2533,6 +2604,7 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, CS_TEAM_T, CS_DONTCHANGE );
+                FireMsgTeamInfo( id, CS_TEAM_T );
             }
         case 1:
             if( team == CS_TEAM_SPECTATOR || team == CS_TEAM_UNASSIGNED )
@@ -2540,6 +2612,7 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, CS_TEAM_CT, CS_DONTCHANGE );
+                FireMsgTeamInfo( id, CS_TEAM_CT );
             }
         case 4: {
             if( g_Tnum < g_Cnum ) {
@@ -2557,6 +2630,7 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, t, CS_DONTCHANGE );
+                FireMsgTeamInfo( id, t );
             }
         }
         case 5:
@@ -2565,10 +2639,9 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, CS_TEAM_SPECTATOR, CS_DONTCHANGE );
+                FireMsgTeamInfo( id, CS_TEAM_SPECTATOR );
             }
     }
-    
-    set_task( 0.1, "RefreshReadyList" );
     
     return;
 }
@@ -3368,6 +3441,7 @@ public plugin_init()
     g_msgidRoundTime    = get_user_msgid( "RoundTime" );
     g_msgidWeapPickup   = get_user_msgid( "WeapPickup" );
     g_msgidCurWeapon    = get_user_msgid( "CurWeapon" );
+    g_msgidTeamInfo     = get_user_msgid( "TeamInfo" );
     
     register_message( get_user_msgid( "ShowMenu" ), "HookTeamMenu" );
     register_message( get_user_msgid( "VGUIMenu" ), "HookVGuiTeamMenu" );
