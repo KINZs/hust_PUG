@@ -278,7 +278,6 @@ new     g_msgidHideWeapon;      // message id for "HideWeapon" Msg
 new     g_msgidRoundTime;       // message id for "RoundTime" Msg
 new     g_msgidWeapPickup;      // message id for "WeapPickup" Msg
 new     g_msgidCurWeapon;       // message id for "CurWeapon" Msg
-new     g_msgidTeamInfo;        // message id for "TeamInfo" Msg
 
 // some message handles
 new     g_hmsgHideWeapon;       // handle for registered message "HideWeapon"
@@ -478,7 +477,6 @@ public fwdSetClListen( receiver, sender, bool: bListen )
 //      → findHUDPos
 //      → ServerSay
 //          └ client_print_color *
-//      → FireMsgTeamInfo
 //      → FireMsgTeamScore
 //      → RefreshReadyList
 //          └ ShowReadyList ←
@@ -575,31 +573,6 @@ ServerSay( const fmt[], any:... )
 }
 
 /*
-    This function fires a public message TeamInfo to indicate team change of
-    player.
-    
-    @param  id          :   index of player
-    @param  team        :   team of player
-    @return none
-*/
-FireMsgTeamInfo( id, CsTeams: team )
-{
-    message_begin( MSG_ALL, g_msgidTeamInfo );
-    {
-        write_byte( id );
-        switch( team ) {
-            case CS_TEAM_UNASSIGNED:    write_string( "UNASSIGNED" );
-            case CS_TEAM_T         :    write_string( "TERRORIST" );
-            case CS_TEAM_CT        :    write_string( "CT" );
-            case CS_TEAM_SPECTATOR :    write_string( "SPECTATOR" );
-        }
-    }
-    message_end();
-    
-    return;
-}
-
-/*
     This function fires a public message TeamScore to indicate team change of
     team scores.
     
@@ -630,7 +603,7 @@ FireMsgTeamScore( CsTeams: team, score )
     @param  none
     @return none
 */
-public RefreshReadyList()
+RefreshReadyList()
 {
     new i, id, CsTeams: team, itot, iurdy;
     new len1, len2;
@@ -1061,36 +1034,22 @@ PutPlayer( id, CsTeams: oldteam, CsTeams: newteam )
 { 
     if( oldteam == newteam ) return;
 
+    g_teamHash[id] = newteam;
     switch( oldteam ) {
         case CS_TEAM_T: g_Tnum--;
         case CS_TEAM_CT: g_Cnum--;
     }
     
     switch( newteam ) {
-        case CS_TEAM_T: {
-            g_teamHash[id] = CS_TEAM_T;
-            g_Tnum++;
-        }
-        case CS_TEAM_CT: {
-            g_teamHash[id] = CS_TEAM_CT;
-            g_Cnum++;
-        }
-        case CS_TEAM_SPECTATOR: {
-            g_teamHash[id] = CS_TEAM_SPECTATOR;
-            if( g_ready[id] ) {
-                g_ready[id] = false;
-                g_rdy--;
-            }
-        }
-        default: {
-            g_teamHash[id] = CS_TEAM_UNASSIGNED;
-            if( g_ready[id] ) {
-                g_ready[id] = false;
-                g_rdy--;
-            }
+        case CS_TEAM_T:     g_Tnum++;
+        case CS_TEAM_CT:    g_Cnum++;
+        default: if( g_ready[id] ) {
+            g_ready[id] = false;
+            g_rdy--;
         }
     }
-    get_user_name( id, g_name[id], 31 );
+    if( oldteam == CS_TEAM_UNASSIGNED )
+        get_user_name( id, g_name[id], 31 );
     
     return;
 }
@@ -1227,8 +1186,7 @@ public eventTeamInfo()
     oteam = g_teamHash[id];
     if( oteam != team ) {
         PutPlayer( id, oteam, team );
-        if( team == CS_TEAM_T || team == CS_TEAM_CT || !StatLive() ) 
-            RefreshReadyList();
+        if( !StatLive() ) RefreshReadyList();
     }
     
     if( StatMatch() ) return;
@@ -2595,7 +2553,7 @@ MenuShowTeamMenu( id )
 
 public MenucmdPUGTeam( id, key )
 {
-    new CsTeams: team = cs_get_user_team( id ), ts[2], CsTeams: t;
+    new CsTeams: team = g_teamHash[id], ts[2], CsTeams: t;
         
     switch( key ) {
         case 0:
@@ -2604,7 +2562,10 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, CS_TEAM_T, CS_DONTCHANGE );
-                FireMsgTeamInfo( id, CS_TEAM_T );
+                if( team != CS_TEAM_T ) {
+                    PutPlayer( id, team, CS_TEAM_T );
+                    RefreshReadyList();
+                }
             }
         case 1:
             if( team == CS_TEAM_SPECTATOR || team == CS_TEAM_UNASSIGNED )
@@ -2612,7 +2573,10 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, CS_TEAM_CT, CS_DONTCHANGE );
-                FireMsgTeamInfo( id, CS_TEAM_CT );
+                if( team != CS_TEAM_CT ) {
+                    PutPlayer( id, team, CS_TEAM_CT );
+                    RefreshReadyList();
+                }
             }
         case 4: {
             if( g_Tnum < g_Cnum ) {
@@ -2630,7 +2594,10 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, t, CS_DONTCHANGE );
-                FireMsgTeamInfo( id, t );
+                if( team != t ) {
+                    PutPlayer( id, team, t );
+                    RefreshReadyList();
+                }
             }
         }
         case 5:
@@ -2639,7 +2606,10 @@ public MenucmdPUGTeam( id, key )
             else {
                 user_kill( id );
                 cs_set_user_team( id, CS_TEAM_SPECTATOR, CS_DONTCHANGE );
-                FireMsgTeamInfo( id, CS_TEAM_SPECTATOR );
+                if( team != CS_TEAM_SPECTATOR ) {
+                    PutPlayer( id, team, CS_TEAM_SPECTATOR );
+                    RefreshReadyList();
+                }
             }
     }
     
@@ -3366,6 +3336,7 @@ public client_disconnect( id )
         case CS_TEAM_T: g_Tnum--;
         case CS_TEAM_CT: g_Cnum--;
     }
+    RefreshReadyList();
     
     if( g_Tnum * g_Cnum == 0 && StatMatch() ) server_cmd( "hp_forcestop" );
     
@@ -3426,7 +3397,7 @@ public plugin_init()
     register_event( "CurWeapon", "eventCurWeapon", "be", "1=0", "2=29" );
     register_event( "HLTV", "eventNewRoundStart", "a", "1=0", "2=0" );
     register_event( "ResetHUD", "eventResetHUD", "b" );
-    register_event( "TeamInfo", "eventTeamInfo", "a", "2=CT", "2=TERRORIST" );
+    register_event( "TeamInfo", "eventTeamInfo", "a" );
     
     g_hamPostSpawn      = RegisterHam( Ham_Spawn, "player", "hamPostPlayerSpawn", 1 );
     g_hamFwdDeath       = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 );
@@ -3441,7 +3412,6 @@ public plugin_init()
     g_msgidRoundTime    = get_user_msgid( "RoundTime" );
     g_msgidWeapPickup   = get_user_msgid( "WeapPickup" );
     g_msgidCurWeapon    = get_user_msgid( "CurWeapon" );
-    g_msgidTeamInfo     = get_user_msgid( "TeamInfo" );
     
     register_message( get_user_msgid( "ShowMenu" ), "HookTeamMenu" );
     register_message( get_user_msgid( "VGUIMenu" ), "HookVGuiTeamMenu" );
