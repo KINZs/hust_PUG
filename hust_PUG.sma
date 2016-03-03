@@ -4,7 +4,7 @@
 *
 *   │  Author  :       Chen Shi (aka. real, HUST CSer & NUDT)
 *   │  Contact :       bigbryant@qq.com
-*   │  Version :       1.4.1a4
+*   │  Version :       1.4.1
 *
 *   This plugin is free software; you can redistribute it and/or modify it
 *   under the terms of the GNU General Public License as published by the
@@ -16,7 +16,12 @@
 *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
 *   General Public License for more details.
 *
-*   │  Changelog: 2016-03-01
+*   │  Changelog: 2016-03-02
+*
+*       1.4.1   1) fix all menu bugs
+*               2) minor fixes
+*
+*       1.4.1a5 1) change pick team menu into count down menu
 *
 *       1.4.1a4 1) remove customed team select menu, use system defined instead
 *               2) fix some of counting down bug
@@ -73,8 +78,8 @@
 #tryinclude "colorchat"
 #tryinclude "dhudmessage"
 
-#if AMXX_VERSION_NUM < 180
-    #assert "AMX MOD X 1.8.0+ is required, compiling will be terminated..."
+#if AMXX_VERSION_NUM < 181
+    #assert "AMX MOD X 1.8.1+ is required, compiling will be terminated..."
     #endinput
 #endif
 
@@ -101,7 +106,7 @@ const   r_MENU_MODEL_SELECT         =   3;
 
 
 new const PLUGIN_NAME[]     =   "HUST PUG";
-new const PLUGIN_VERSION[]  =   "1.4.1a4";
+new const PLUGIN_VERSION[]  =   "1.4.1";
 new const PLUGIN_AUTHOR[]   =   "real";
 
 // need flag "b" to control the plugin
@@ -113,9 +118,6 @@ const   MAX_PLAYERS         =   32;
 // default config file sub directory
 new const PUG_CONFIG_DIR[]  =   "hustpug";
 new const PUG_CONFIG_FILE[] =   "hustpug.cfg";
-
-// vote map list item num (9 max)
-const   MAP_VOTE_NUM        =   9;
 
 // Max Director HUD NUM
 const   MAX_DHUD            =   8;
@@ -149,7 +151,6 @@ new const Float: HUD_POS_RDYLIST[]      =   { 0.7, 0.2 };
 new const Float: HUD_POS_NOTIFY[]       =   { -1.0, 0.0 };
 new const Float: HUD_POS_SCOREBOARD[]   =   { -1.0, 0.0 };
 new const Float: HUD_POS_SHOWMONEY[]    =   { 0.6, 0.2 };
-new const Float: HUD_POS_COUNTDOWN[]    =   { 0.03, 0.6 };
 new const Float: HUD_POS_PLRDY[]        =   { -1.0, 0.55 };
 new const Float: HUD_POS_MATCHNOT[]     =   { -1.0, 0.4 };
 new const Float: HUD_POS_ACT[]          =   { -1.0, 0.3 };
@@ -279,15 +280,7 @@ new     g_pcFreezeTime;         // mp_freezetime
 new     g_pcAllTalk;            // sv_alltalk
 
 // global match parameters
-new     g_mMaxRound;            // max round of the match
-
-// vars to save swap requests and choices
-new     g_SwapRequest[MAX_PLAYERS + 1];             // player requesting states
-new     g_SwapBeRQ[MAX_PLAYERS + 1];                // player requested states
-new     bool: g_SwapJudge[MAX_PLAYERS + 1];         // if swap agreed
-    
-// count down global vars
-new     g_countdownSwapMenu[MAX_PLAYERS + 1];        // count down global for swap menu
+new     g_MaxRound;            // max round of the match
     
 // vars to save 5-link status of player
 new     bool: g_playertalk[MAX_PLAYERS + 1];
@@ -319,11 +312,36 @@ new     g_hfwdSetModel;
 new     g_hfwdSetClientListen;
 
 // Player menu related part
+const   MAP_VOTE_NUM        =   9;      // vote map list item num (9 max)
+const   OFFSET_COUNT_MENU_PICKTEAM      =   250500;
+const   OFFSET_COUNT_MENU_SWAPASK       =   251000;
+const   OFFSET_COUNT_MENU_VOTEMAP       =   251500;
+const   OFFSET_COUNT_MENU_VOTEKICK      =   252000;
+    // pre-built menu bodies and handles
+new     g_szMenuPickTeam[256];
+new     g_hmMatchMenu;              // handle of PUG Match menu
+new     g_hmPlayerMenu;             // handle of PUG player menu
+    // count down globals
+new     g_countdownPickTeam;
+new     g_countdownVoteMap;
+new     g_countdownVoteKick;
+new     g_countdownSwapMenu[MAX_PLAYERS + 1]; // count down global for swap menu
+new     g_countdownSwapAsk[MAX_PLAYERS + 1];
+    // map related globals
+        // vars to save swap requests and choices
+new     g_SwapRequest[MAX_PLAYERS + 1];             // player requesting states
+new     g_SwapBeRQ[MAX_PLAYERS + 1];                // player requested states
+new     bool: g_SwapJudge[MAX_PLAYERS + 1];         // if swap agreed
 new     bool: g_bIsOnVote;              // to indicate if a vote is on now
-new     Array: g_Maps, g_Mapnum;        // maps name and map num
-new     g_VoteCount[MAP_VOTE_NUM], g_VoteMapid[MAP_VOTE_NUM];   // save map vote result
+new     g_tskidOnVote;
 new     g_kickid, g_kickagree;          // player who is being vote kicked
-new     g_mPickTeam;                    // pickteam menu count
+new     g_countPickTeam, g_mPickTeamAgree;
+new     Array: g_Maps, g_Mapnum;        // maps name and map num
+new     g_VoteMapCount[MAP_VOTE_NUM + 1], g_VoteMapid[MAP_VOTE_NUM + 1];   // save map vote result
+new     g_countVoteMap, g_countVoteKick;
+new     bool: g_bTeamPicked[MAX_PLAYERS + 1];
+new     bool: g_bMapVoted[MAX_PLAYERS + 1];
+new     bool: g_bKickVoted[MAX_PLAYERS + 1];
 
 new     g_hostname[32];                 // hostname of server
 
@@ -728,7 +746,7 @@ RefreshHUDScore()
         case STATUS_S_HALF: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_S_HALF" );
         case STATUS_INTER: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_INTER" );    
     }
-    len += formatex( g_szHUDScore[len], maxl - len, " %L", LANG_SERVER, "PUG_MATCHPROC", g_RoundNum, 2 * g_mMaxRound );
+    len += formatex( g_szHUDScore[len], maxl - len, " %L", LANG_SERVER, "PUG_MATCHPROC", g_RoundNum, 2 * g_MaxRound );
     len += formatex( g_szHUDScore[len], maxl - len, "^n%L", LANG_SERVER, "PUG_SCOREBOARD", St, Sc );
     
     ShowHUDScore( { 0 } );
@@ -976,7 +994,7 @@ public SwapTeam()
                     }
                 }
                 cs_set_user_team( id, CS_TEAM_CT, CS_DONTCHANGE );
-                g_teamHash[id] = CS_TEAM_CT;
+                PutPlayer( id, team, CS_TEAM_T );
             }
             case CS_TEAM_CT: {
                 if( is_user_alive( id ) ) {
@@ -984,7 +1002,7 @@ public SwapTeam()
                     transid = id;
                 }
                 cs_set_user_team( id, CS_TEAM_T, CS_DONTCHANGE );
-                g_teamHash[id] = CS_TEAM_T;
+                PutPlayer( id, team, CS_TEAM_CT );
             }
         }
     }
@@ -1067,10 +1085,9 @@ PutPlayer( id, CsTeams: oldteam, CsTeams: newteam )
 
     g_teamHash[id] = newteam;
     switch( oldteam ) {
-        case CS_TEAM_T: g_Tnum--;
-        case CS_TEAM_CT: g_Cnum--;
-    }
-    
+        case CS_TEAM_T:     g_Tnum--;
+        case CS_TEAM_CT:    g_Cnum--;
+    }    
     switch( newteam ) {
         case CS_TEAM_T:     g_Tnum++;
         case CS_TEAM_CT:    g_Cnum++;
@@ -1768,8 +1785,8 @@ public clcmdChooseTeam( id )
                     MenuShowSwapMenu( id );
                 }
                 else {
-                    client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU", TSWAP );
-                    g_countdownSwapMenu[id] = TSWAP;
+                    g_countdownSwapMenu[id] = TSWAP + 1;
+                    SwapCenterCountDown( id + OFFSET_COUNT );
                     set_task( 1.0, "SwapCenterCountDown", id + OFFSET_COUNT, _, _, "a", TSWAP );
                 }
                 
@@ -2041,7 +2058,7 @@ StopWarm()
         set_task( HUD_INT_SCOREBOARD, "ShowHUDScore", TASKID_SHOWSCORE, { 0 }, 1, "b" );
     
     // get match parameters
-    g_mMaxRound = get_pcvar_num( g_pcMaxRound );
+    g_MaxRound = get_pcvar_num( g_pcMaxRound );
     get_pcvar_string( g_pcMatchCfg, fname, 31 );
     len = get_configsdir( fpath, 63 );
     len += formatex( fpath[len], 63 - len, "/%s/%s", PUG_CONFIG_DIR, fname );
@@ -2123,7 +2140,7 @@ KnifeRoundWon( CsTeams: team )
     set_dhudmessage( 0xff, 0xff, 0xff, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_KNIFEWON_MSG", teamname );
 
-    MenuShowPickTeam( team );
+    MenuSetPickTeam( team );    
     
     return;
 }
@@ -2316,8 +2333,8 @@ MatchWin( CsTeams: team )
 MatchDraw()
 {
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
-    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHDRAW_HUD", g_mMaxRound, g_mMaxRound );
-    ServerSay( "%L", LANG_SERVER, "PUG_MATCHDRAW_MSG", g_mMaxRound, g_mMaxRound );
+    show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHDRAW_HUD", g_MaxRound, g_MaxRound );
+    ServerSay( "%L", LANG_SERVER, "PUG_MATCHDRAW_MSG", g_MaxRound, g_MaxRound );
     
     set_task( 5.0, "EnterWarm" );
     
@@ -2343,17 +2360,17 @@ bool: UpdateScore( CsTeams: team, score )
             if( score > g_scorebuff[tid] ) {
                 bIfScored = true;
                 g_Score[tid][0]++;
-                if( g_Score[0][0] + g_Score[1][0] == g_mMaxRound ) 
+                if( g_Score[0][0] + g_Score[1][0] == g_MaxRound ) 
                     EnterIntermission();
             }
         case STATUS_S_HALF:
             if( score > g_scorebuff[tid] ) {
                 bIfScored = true;
                 g_Score[tid][1]++;
-                if( g_Score[tid][0] + g_Score[tid][1] == g_mMaxRound + 1 ) 
+                if( g_Score[tid][0] + g_Score[tid][1] == g_MaxRound + 1 ) 
                     MatchWin( team );                
-                if( g_Score[0][0] + g_Score[0][1] == g_mMaxRound && 
-                    g_Score[1][0] + g_Score[1][1] == g_mMaxRound ) 
+                if( g_Score[0][0] + g_Score[0][1] == g_MaxRound && 
+                    g_Score[1][0] + g_Score[1][1] == g_MaxRound ) 
                     MatchDraw();
             }
     }
@@ -2366,6 +2383,7 @@ bool: UpdateScore( CsTeams: team, score )
     This function hooks the message "TeamScore" and put the correct team score
     onto the TAB scoreboard. It also update the score in match.
     
+    g_msgidTeamScore = get_user_msgid( "TeamScore" )
     register_message( g_msgidTeamScore, "msgTeamScore" )
     
     @param  none
@@ -2455,139 +2473,138 @@ UpdateRoundNum()
 //  ┌──────────────────────────┐
 //  │  MENU RELATED FUNCTIONS  │
 //  └──────────────────────────┘
-//      ┌ MenuShowPickTeam ←
-//      │   ├ TaskMenuCountDown ←
-//      │   ├ MenuJudgePickTeamVote ←
-//      │   └ EnterFirstHalf
+//      ┌ MenuBuildShowPickTeam
+//      ├ MenuSetPickTeam ←
+//      │   └ MenuShowPickTeam ←
+//      │       └ MenuJudgePickTeamVote ←
+//      │           └ EnterFirstHalf
 //      └ MenucmdPickTeam ←
 //      ┌ MenuShowSwapMenu ←
+//      ├ SwapCenterCountDown ←
 //      └ MenucmdSwapMenu ←
-//          └┌ MenuShowSwapAsk ←
-//           │   └ MenuJudgeSwapAsk ←
+//          └┌ MenuSetSwapAsk ←
+//           │   └ MenuShowSwapAsk ←
+//           │       └ MenuJudgeSwapAsk ←
 //           └ MenucmdSwapAsk ←
-//      ┌ MenuShowMatchMenu ←
+//      ┌ MenuBuildMatchMenu ←
+//      ├ MenuShowMatchMenu ←
 //      └ MenucmdMatchMenu ←
 //      ┌ MenuShowVoteMap ←
-//      │   └ MenuJudgeVoteMap ←
-//      │       └ DelayChangelevel ←
+//      │   └ MenuShowVoteMap ←
+//      │       └ MenuJudgeVoteMap ←
+//      │           └ DelayChangelevel ←
 //      └ MenucmdVoteMap ←
+//          └ MenuJudgeVoteMap ←
 //      ┌ MenuShowVoteKick ←
 //      └ MenucmdVoteKick ←
-//          └┌ MenuJudgeAskKick ←
+//          └┌ MenuSetAskKick ←
+//           │   └ MenuShowAskKick ←
+//           │       └ MenuJudgeAskKick ←  
 //           └ MenucmdAskKick ←
+//               └ MenuJudgeAskKick ←  
 //==============================================================================
 
 /*
-    This function shows a count down HUD message to prompt time left for the menu.
-    This function uses a normal HUD message.
-    
-    HUD params:
-        ├ CHANNEL:    CH_COUNTDOWN
-        ├ POSITION:   HUD_POS_COUNTDOWN[]
-        └ COLOR:      #FFFFFF (white)
-    
-    @param  tskid       :   showtime = tskid - OFFSET_COUNT is the total time for counting down (sec)
-    @return none
-*/ 
-public TaskMenuCountDown( tskid )
-{
-    static bool: firstcall;
-    static time;
-    
-    if( !firstcall ) {
-        firstcall = true;
-        time = tskid - OFFSET_COUNT - 1;
-    }
-    
-    if( time > 0 ) {
-        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_COUNTDOWN[0], HUD_POS_COUNTDOWN[1], 0, 0.0, 1.0, 0.0, 0.0, CH_COUNTDOWN );
-        show_hudmessage( 0, "%L %d", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT", time-- );
-    }
-    else
-        firstcall = false;
-    
-    return;
-}
-
-/*
-    This function shows a centered count down message for the swap team menu.
-    
-    @param  para[0]     :   total time for counting down (sec)
-    @param  para[1]     :   index of player
-    @return none
-*/ 
-public SwapCenterCountDown( tskid )
-{
-    new id = tskid - OFFSET_COUNT;
-    
-    if( --g_countdownSwapMenu[id] > 0 )
-        client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU", g_countdownSwapMenu[id] );
-    else
-        client_print( id, print_center, "" );
-        
-    return;
-}
-
-/*
     These bunch of functions aims to proceed with a menu that shows after knife
-    round to let the winner's team to pick the team they want.
+    round to let the winner's team to pick the team they want. The pre-
+    build function is called in plugin_cfg()
     
+    Construct func      :   MenuConstructShowPickTeam
     Show Menu func      :   MenuShowPickTeam
     Menu Select func    :   MenucmdPickTeam
     Result func:        :   MenuJudgePickTeamVote
 */ 
-MenuShowPickTeam( CsTeams: team )
+MenuBuildPickTeam()
 {
-    const   SHOWTIME = 8;
-    static szMenu[256], len;
-    new i, id, CsTeams: t;
+    new len = formatex( g_szMenuPickTeam, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_PICKTEAMTITLE" );
+    len += formatex( g_szMenuPickTeam[len], 255 - len, "\r1.  \w%L^n", LANG_SERVER, "PUG_MENU_PICKTEAMOP1" );
+    len += formatex( g_szMenuPickTeam[len], 255 - len, "\r2.  \w%L^n^n", LANG_SERVER, "PUG_MENU_PICKTEAMOP2" );
+    len += formatex( g_szMenuPickTeam[len], 255 - len, "%L \r", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT" );
     
-    len = formatex( szMenu, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_PICKTEAMTITLE" );
-    len += formatex( szMenu[len], 255 - len, "\r1.  \w%L^n", LANG_SERVER, "PUG_MENU_PICKTEAMOP1" );
-    len += formatex( szMenu[len], 255 - len, "\r2.  \w%L", LANG_SERVER, "PUG_MENU_PICKTEAMOP2" );
+    return;
+}
+
+MenuSetPickTeam( CsTeams: team )
+{
+    const T_SHOWPICKTEAM = 10;
+    static id, i, tid;
     
-    g_mPickTeam = 0;
+    g_bIsOnVote = true;     // set voting on flag
+    remove_task( g_tskidOnVote, 0 );
     for( i = 0; i < MAX_PLAYERS; i++ ) {
-        id = i + 1;
-        if( !is_user_connected( id ) ) continue;
-        
-        t = cs_get_user_team( id );
-        if( t == team ) show_menu( id, 3, szMenu, SHOWTIME, "#PUG_Menu_WinKnifeRound" );
+        tid = i + 1;
+        if( ( id = g_SwapBeRQ[tid] ) != 0 && g_teamHash[tid] == team ) {
+            g_SwapBeRQ[tid] = g_SwapRequest[id] = 0;
+            remove_task( tid + OFFSET_COUNT_MENU_SWAPASK, 0 );
+        }
     }
-    set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_COUNTDOWN[0], HUD_POS_COUNTDOWN[1], 0, 0.0, 1.0, 0.0, 0.0, CH_COUNTDOWN );
-    show_hudmessage( 0, "%L %d", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT", SHOWTIME );
-    set_task( 1.0, "TaskMenuCountDown", SHOWTIME + OFFSET_COUNT, _, _, "a", SHOWTIME - 1 );
+    g_tskidOnVote = _:( team ) + OFFSET_COUNT_MENU_PICKTEAM;
+    arrayset( g_bTeamPicked, false, sizeof( g_bTeamPicked ) );
+    g_mPickTeamAgree = g_countPickTeam = 0;
+    g_countdownPickTeam = T_SHOWPICKTEAM + 1;
+    MenuShowPickTeam( _:( team ) + OFFSET_COUNT_MENU_PICKTEAM );
+    set_task( 1.0, "MenuShowPickTeam", g_tskidOnVote, _, _, "a", T_SHOWPICKTEAM );
     
-    set_task( float( SHOWTIME ), "MenuJudgePickTeamVote" );
-    set_task( float( SHOWTIME + 1 ), "EnterFirstHalf" );
+    return;
+}
+
+public MenuShowPickTeam( tskid )
+{
+    new CsTeams: team = CsTeams:( tskid - OFFSET_COUNT_MENU_PICKTEAM );
+    static msg[256], i, id;
+    
+    if( --g_countdownPickTeam > 0 ) {
+        formatex( msg, 255, "%s %d", g_szMenuPickTeam, g_countdownPickTeam );
+        for( i = 0; i < MAX_PLAYERS; i++ ) {
+            id = i + 1;
+            if( !is_user_connected( id ) || g_bTeamPicked[id] || 
+                g_teamHash[id] != team ) 
+                continue;
+
+            show_menu( id, 3, msg, 1, "#PUG_Menu_WinKnifeRound" );
+        }
+    }
+    else
+        MenuJudgePickTeamVote();
    
     return;
 }
 
 public MenucmdPickTeam( id, key )
 {
-    static name[32], Msg[128];
+    static name[32], Msg[128], pnum;
     
     get_user_name( id, name, 31 );
+    g_bTeamPicked[id] = true;
+    g_countPickTeam++;
     if( key == 0 ) {
-        g_mPickTeam++;
+        g_mPickTeamAgree++;
         formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PICKTEAMOP1RES", name );
     }
     else
         formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PICKTEAMOP2RES", name );
     ServerSay( Msg );
+    if( g_teamHash[id] == CS_TEAM_T ) pnum = g_Tnum; else pnum = g_Cnum;
+    
+    if( g_countPickTeam >= pnum ) {
+        remove_task( g_tskidOnVote, 0 );
+        MenuJudgePickTeamVote();
+    }
     
     return;
 }
 
-public MenuJudgePickTeamVote()
+MenuJudgePickTeamVote()
 {
-    if( g_mPickTeam > 2 ) {
+    if( g_mPickTeamAgree > 2 ) {
         ServerSay( "%L", LANG_SERVER, "PUG_VOTESWAP" );
         SwapTeam();
     }
     else
         ServerSay( "%L", LANG_SERVER, "PUG_VOTENOTSWAP" );
+        
+    g_bIsOnVote = false; // remove vote on flag
+    set_task( 1.0, "EnterFirstHalf" );
     
     return;
 }
@@ -2604,6 +2621,18 @@ public MenuJudgePickTeamVote()
     The following 2 functions is to block the original menu
     Others              :   HookTeamMenu, HookVGuiTeamMenu
 */ 
+public SwapCenterCountDown( tskid )
+{
+    new id = tskid - OFFSET_COUNT;
+    
+    if( --g_countdownSwapMenu[id] > 0 )
+        client_print( id, print_center, "%L %L", LANG_SERVER, "PUG_CANTTEAMSELECT", LANG_SERVER, "PUG_WILLOPENSWAPMENU", g_countdownSwapMenu[id] );
+    else
+        client_print( id, print_center, "" );
+        
+    return;
+}
+
 MenuShowSwapMenu( id )
 {
     new CsTeams: team = g_teamHash[id];
@@ -2612,7 +2641,7 @@ MenuShowSwapMenu( id )
     
     if( g_SwapRequest[id] != 0 ) {
         client_print( id, print_chat, "%L", LANG_SERVER, "PUG_MENU_ALRDYRQSWAP" );
-        return PLUGIN_HANDLED;
+        return;
     }
     
     formatex( szMenuTitle, 63, "\y%L", LANG_SERVER, "PUG_MENU_SWAPTITLE" );
@@ -2641,17 +2670,17 @@ MenuShowSwapMenu( id )
     menu_setprop( hSwapMenu, MPROP_NEXTNAME, Msg );
     formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PREVPAGE" );
     menu_setprop( hSwapMenu, MPROP_BACKNAME, Msg );
+    show_menu( id, 0, "^n", 1 );
     menu_display( id, hSwapMenu, 0 );
     
-    return PLUGIN_CONTINUE;
+    return;
 }
 
 public MenucmdSwapMenu( id, menu, item )
 {
-    static szBuffer[8], tid, szName[8];
-    new _access, item_callback;
+    static szBuffer[8], tid, szName[8], _access, _callback;
     
-    menu_item_getinfo( menu, item, _access, szBuffer, 7, szName, 7, item_callback );
+    menu_item_getinfo( menu, item, _access, szBuffer, 7, szName, 7, _callback );
     menu_destroy( menu );
     tid = str_to_num( szBuffer );
     
@@ -2665,32 +2694,47 @@ public MenucmdSwapMenu( id, menu, item )
     g_SwapRequest[id] = tid;
     g_SwapBeRQ[tid] = id;
     
-    MenuShowSwapAsk( tid );
+    MenuSetSwapAsk( tid );
     
     return;
 }
 //--------------------------------------------------------------------
-MenuShowSwapAsk( tid )
+MenuSetSwapAsk( tid )
 {
+    static const   T_SWAPASK   =   10;
     static szMenu[256], len, name1[32], name2[32], tn[16];
-    new id = g_SwapBeRQ[tid], CsTeams: team;
+    new id = g_SwapBeRQ[tid], CsTeams: team = g_teamHash[id];
     
     get_user_name( id, name1, 31 );
     get_user_name( tid, name2, 31 );
-    team = g_teamHash[id];
     switch( team ) {
         case CS_TEAM_T: formatex( tn, 15, "%L", LANG_SERVER, "PUG_TNAME" );
         case CS_TEAM_CT: formatex( tn, 15, "%L", LANG_SERVER, "PUG_CTNAME" );
     }
-    
     ServerSay( "%L", LANG_SERVER, "PUG_MENU_SWAPRQMSG", name1, name2 );
-    
     len = formatex( szMenu, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_SWAPASKTITLE", tn, name1 );
     len += formatex( szMenu[len], 255 - len, "\r1.  \w%L^n", LANG_SERVER, "PUG_MENU_AGREESWAP" );
-    len += formatex( szMenu[len], 255 - len, "\r2.  \w%L", LANG_SERVER, "PUG_MENU_REJSWAP" );
-    show_menu( tid, 3, szMenu, 8, "#PUG_Menu_IfAgreeToSwap" );
+    len += formatex( szMenu[len], 255 - len, "\r2.  \w%L^n^n", LANG_SERVER, "PUG_MENU_REJSWAP" );
+    len += formatex( szMenu[len], 255 - len, "%L \r", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT" );
     
-    set_task( 8.0, "MenuJudgeSwapAsk", tid + OFFSET_MENU );
+    g_countdownSwapAsk[tid] = T_SWAPASK + 1;
+    MenuShowSwapAsk( szMenu, tid + OFFSET_COUNT_MENU_SWAPASK );
+    set_task( 1.0, "MenuShowSwapAsk", tid + OFFSET_COUNT_MENU_SWAPASK, szMenu, sizeof( szMenu ), "a", T_SWAPASK );
+    
+    return;
+}
+
+public MenuShowSwapAsk( const szMenu[], tskid )
+{
+    static msg[256];
+    new id = tskid - OFFSET_COUNT_MENU_SWAPASK;
+    
+    if( --g_countdownSwapAsk[id] > 0 ) {
+        formatex( msg, 255, "%s %d", szMenu, g_countdownSwapAsk[id] );
+        show_menu( id, 3, msg, 1, "#PUG_Menu_IfAgreeToSwap" );
+    }
+    else
+        MenuJudgeSwapAsk( id );
     
     return;
 }
@@ -2701,35 +2745,33 @@ public MenucmdSwapAsk( id, key )
         case 0: g_SwapJudge[id] = true;
         case 1: g_SwapJudge[id] = false;
     }
+    remove_task( id + OFFSET_COUNT_MENU_SWAPASK, 0 );
+    MenuJudgeSwapAsk( id );
     
     return;
 }
 
-public MenuJudgeSwapAsk( tskid )
+MenuJudgeSwapAsk( tid )
 {
-    new tid = tskid - OFFSET_MENU;
     new id = g_SwapBeRQ[tid];
     new CsTeams: team1 = g_teamHash[id];
     new CsTeams: team2 = g_teamHash[tid];
     static tn[2], name1[32], name2[32];
     
     tn[1] = 0;
-    if( team1 == CS_TEAM_CT )
-        tn[0] = '2';
-    else
-        tn[0] = '1';
+    if( team1 == CS_TEAM_T ) tn[0] = '1'; else tn[0] = '2';
     
     if( g_SwapJudge[tid] ) {
         if( team2 == CS_TEAM_SPECTATOR ) {
             user_kill( id );
-            engclient_cmd( tid, "jointeam", tn );
+            client_cmd( tid, "jointeam ^"%s^"", tn );
         }
         else
             cs_set_user_team( tid, team1, CS_DONTCHANGE );
         cs_set_user_team( id, team2, CS_DONTCHANGE );
         
-        g_teamHash[id] = team2;
-        g_teamHash[tid] = team1;
+        PutPlayer( id, team1, team2 );
+        PutPlayer( tid, team2, team1 );
         
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREED" );
         client_print( tid, print_center, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREE" );
@@ -2743,8 +2785,8 @@ public MenuJudgeSwapAsk( tskid )
         client_print( tid, print_center, "%L", LANG_SERVER, "PUG_MENU_REJSWAP" );
     }
     
-    g_SwapRequest[id] = 0;
-    g_SwapBeRQ[tid] = 0;
+    // remove RQ flags for both players
+    g_SwapRequest[id] = g_SwapBeRQ[tid] = 0;
     g_SwapJudge[tid] = false;
     
     return;
@@ -2757,38 +2799,59 @@ public MenuJudgeSwapAsk( tskid )
     Show Menu func      :   MenuShowMatchMenu
     Menu Select func    :   MenucmdMatchMenu
     Result func         :   N/A
-*/ 
+*/
+MenuBuildMatchMenu()
+{
+    new msg[128], tag[2];
+    
+    formatex( msg, 127, "\y%L", LANG_SERVER, "PUG_MENU_MATCHTITLE" );
+    g_hmMatchMenu = menu_create( msg, "MenucmdMatchMenu" );
+    tag[1] = 0; tag[0] = 0x30;
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSTARTKNIFE" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSTARTNOKNIFE" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHHALFR3" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHRER3" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSTOP" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHPAUSE" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSWAPTEAM" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_EXITNAME" );
+    menu_setprop( g_hmMatchMenu, MPROP_EXITNAME, msg );
+    
+    return;
+}
+
 public MenuShowMatchMenu( id, level, cid )
 {
     if( !cmd_access( id, level, cid, 1 ) ) return PLUGIN_HANDLED;
 
-    static szMenu[512], len;
-    
-    len = formatex( szMenu, 511, "\y%L^n^n", LANG_SERVER, "PUG_MENU_MATCHTITLE" );
-    len += formatex( szMenu[len], 511 - len, "\r1.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHSTARTKNIFE" );
-    len += formatex( szMenu[len], 511 - len, "\r2.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHSTARTNOKNIFE" );
-    len += formatex( szMenu[len], 511 - len, "\r3.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHHALFR3" );
-    len += formatex( szMenu[len], 511 - len, "\r4.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHRER3" );
-    len += formatex( szMenu[len], 511 - len, "\r5.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHSTOP" );
-    len += formatex( szMenu[len], 511 - len, "\r6.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHPAUSE" );
-    len += formatex( szMenu[len], 511 - len, "\r7.  \w%L^n", LANG_SERVER, "PUG_MENU_MATCHSWAPTEAM" );
-    len += formatex( szMenu[len], 511 - len, "^n\r0.  \w%L^n", LANG_SERVER, "PUG_MENU_EXITNAME" );
-    
-    show_menu( id, 0x27f, szMenu, -1, "#PUG_Menu_AdminMenu" );
+    show_menu( id, 0, "^n", 1 );
+    menu_display( id, g_hmMatchMenu );
     
     return PLUGIN_HANDLED;
 }
 
-public MenucmdMatchMenu( id, key )
+public MenucmdMatchMenu( id, menu, item )
 {       
+    static info[2], name[2], _access, _callback, key;
+    
+    if( menu == MENU_EXIT ) return;
+    menu_item_getinfo( menu, item, _access, info, 1, name, 1, _callback );
+    key = str_to_num( info );
     switch( key ) {
-        case 0: client_cmd( id, "hp_forcestart -knife" );
-        case 1: client_cmd( id, "hp_forcestart -noknife" );
-        case 2: client_cmd( id, "hp_forcehalfr3" );
-        case 3: client_cmd( id, "hp_forcerer3" );
-        case 4: client_cmd( id, "hp_forcestop" );
-        case 5: client_cmd( id, "amx_pause" );
-        case 6: client_cmd( id, "hp_forceswap" );
+        case 1: client_cmd( id, "hp_forcestart -knife" );
+        case 2: client_cmd( id, "hp_forcestart -noknife" );
+        case 3: client_cmd( id, "hp_forcehalfr3" );
+        case 4: client_cmd( id, "hp_forcerer3" );
+        case 5: client_cmd( id, "hp_forcestop" );
+        case 6: client_cmd( id, "amx_pause" );
+        case 7: client_cmd( id, "hp_forceswap" );
     }
     
     return;
@@ -2800,8 +2863,8 @@ public MenucmdMatchMenu( id, key )
     Show Menu func      :   MenuShowVoteMap
     Menu Select func    :   MenucmdVoteMap
     Result func         :   MenuJudgeVoteMap
-*/ 
-public MenuShowVoteMap( id )
+*/
+public MenuSetVoteMap( id )
 {
     if( g_bIsOnVote ) {
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_ALRDYVOTE" );
@@ -2812,8 +2875,13 @@ public MenuShowVoteMap( id )
         return PLUGIN_HANDLED;
     }
     
+    const T_VOTEMAP = 8;
     static Msg[512], len, mapname[32], nowmap[32];
-    new smap = MAP_VOTE_NUM, i, j, k, bool: MapChosen[32];
+    new smap = MAP_VOTE_NUM, i, j, k, bool: MapChosen[32], key;
+    
+    // set OnVote flag
+    g_bIsOnVote = true;
+    key |= MENU_KEY_0;
     
     get_mapname( nowmap, 31 );
     if( smap > g_Mapnum - 1 ) smap = g_Mapnum - 1;
@@ -2822,6 +2890,7 @@ public MenuShowVoteMap( id )
         ArrayGetString( g_Maps, i, mapname, 31 );
         if( equal( mapname, nowmap ) ) {
             MapChosen[i] = true;
+            g_VoteMapid[0] = i;
             break;
         }
     }
@@ -2834,47 +2903,86 @@ public MenuShowVoteMap( id )
         MapChosen[j] = true;
         ArrayGetString( g_Maps, j, mapname, 31 );
         len += formatex( Msg[len], 511 - len, "\r%d.  \w%s^n", smap - k + 1, mapname );
-        g_VoteMapid[smap - k] = j;
-        g_VoteCount[smap - k] = 0;
+        g_VoteMapid[smap - k + 1] = j;
+        key |= 1 << ( smap - k );
         k--;
     }
-    show_menu( 0, 0x1f, Msg, 10, "#PUG_Menu_VoteMap" );
-    set_task( 10.0, "MenuJudgeVoteMap" );
+    arrayset( g_VoteMapCount, 0, sizeof( g_VoteMapCount ) );
+    arrayset( g_bMapVoted, false, sizeof( g_bMapVoted ) );
+    g_tskidOnVote = key + OFFSET_COUNT_MENU_VOTEMAP;
+    g_countVoteMap = 0;
+    len += formatex( Msg[len], 511 - len, "^n\r0.  \w%L", LANG_SERVER, "PUG_MENU_EXTENDCURMAP" );
+    len += formatex( Msg[len], 511 - len, "^n^n%L\r", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT" );
+    
+    g_countdownVoteMap = T_VOTEMAP + 1;
+    MenuShowVoteMap( Msg, g_tskidOnVote );
+    set_task( 1.0, "MenuShowVoteMap", g_tskidOnVote, Msg, sizeof( Msg ), "a", T_VOTEMAP );
     
     return PLUGIN_HANDLED;
+}
+
+public MenuShowVoteMap( const szt[], tskid )
+{
+    new keys = tskid - OFFSET_COUNT_MENU_VOTEMAP;
+    static id, szMenu[512];
+
+    if( --g_countdownVoteMap > 0 ) {
+        formatex( szMenu, 511, "%s %d", szt, g_countdownVoteMap );
+        for( new i = 0; i < MAX_PLAYERS; i++ ) {
+            id = i + 1;
+            if( g_teamHash[id] != CS_TEAM_UNASSIGNED && !g_bMapVoted[id] ) {
+                show_menu( id, keys, szMenu, 1, "#PUG_Menu_VoteMap" );
+            }
+        }
+    }
+    else
+        MenuJudgeVoteMap();
+    
+    return;
 }
 
 public MenucmdVoteMap( id, key )
 {
     static mapname[32];
-    new pos = g_VoteMapid[key];
+    new index = ( key + 1 ) % 10;
+    new pos = g_VoteMapid[index];
     
     ArrayGetString( g_Maps, pos, mapname, 31 );
-    g_VoteCount[key]++;
+    g_VoteMapCount[index]++;
+    g_bMapVoted[id] = true;
     ServerSay( "%L", LANG_SERVER, "PUG_MENU_VOTEDMSG", g_name[id], mapname );
+    if( ++g_countVoteMap > get_playersnum( 0 ) ) {
+        remove_task( g_tskidOnVote, 0 );
+        MenuJudgeVoteMap();
+    }
     
     return;
 }
 
 public MenuJudgeVoteMap()
 {
-    new i, mapname[32], max = 0, pos;
+    new i, j, mapname[32], maxv = 0, pos;
     
-    for( i = 0; i < 5; i++ )
-        if( g_VoteCount[i] > max ) {
-            max = g_VoteCount[i];
+    for( i = 0; i <= MAP_VOTE_NUM; i++ )
+        if( g_VoteMapCount[i] > maxv ) {
+            maxv = g_VoteMapCount[i];
             pos = g_VoteMapid[i];
+            j = i;
         }
+    g_bIsOnVote = false;
     
-    if( max == 0 ) {
-        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_INVALIDVOTE" );
+    if( maxv == 0 ) {
+        ServerSay( "%L", LANG_SERVER, "PUG_MENU_INVALIDVOTE" );
         return;
     }
     
-    ArrayGetString( g_Maps, pos, mapname, 31 );
-    client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_VOTEMAPRES", mapname );
-    set_task( 3.0, "DelayChangelevel", _, mapname, 31 );
-    g_bIsOnVote = false;
+    if( j != 0 ) {
+        ArrayGetString( g_Maps, pos, mapname, 31 );
+        set_task( 3.0, "DelayChangelevel", _, mapname, 31 );
+    }
+    else
+        formatex( mapname, 31, "%L", LANG_SERVER, "PUG_MENU_EXTENDCURMAP" );
+    ServerSay( "%L", LANG_SERVER, "PUG_MENU_VOTEMAPRES", mapname );        
     
     return;
 }
@@ -2903,8 +3011,7 @@ public MenuShowVoteKick( tid )
     
     static Msg[128], teamname[32], name[32], szid[3];
     new hMenu, i, id, CsTeams: team;
-    
-    g_bIsOnVote = true;
+
     formatex( Msg, 127, "\y%L", LANG_SERVER, "PUG_MENU_VOTEKICKTITLE" );
     hMenu = menu_create( Msg, "MenucmdVoteKick" );
     for( i = 0; i < MAX_PLAYERS; i++ ) {
@@ -2932,6 +3039,7 @@ public MenuShowVoteKick( tid )
     menu_setprop( hMenu, MPROP_NEXTNAME, Msg );
     formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PREVPAGE" );
     menu_setprop( hMenu, MPROP_BACKNAME, Msg );
+    show_menu( tid, 0, "^n", 1 );
     menu_display( tid, hMenu, 0 );
     
     return PLUGIN_HANDLED;
@@ -2939,66 +3047,98 @@ public MenuShowVoteKick( tid )
 
 public MenucmdVoteKick( id, menu, item )
 {
-    static voted[32], tid, kicker[32], teamname[32], szMenu[256], len;
-    new _access, item_callback, CsTeams: team;
+    static _access, item_callback, voted[32], kicker[32], tid;
     
     menu_item_getinfo( menu, item, _access, voted, 31, kicker, 31, item_callback );
     menu_destroy( menu );
     tid = str_to_num( voted );
     
-    if( item == MENU_EXIT ) {
-        g_bIsOnVote = false;
+    if( item == MENU_EXIT ) return;
+        
+    MenuSetAskKick( id, tid );
+    
+    return;
+}
+//--------------------------------------------------------------------
+MenuSetAskKick( kicker, kickid )
+{
+    if( g_bIsOnVote ) {
+        client_print( kicker, print_center, "%L", LANG_SERVER, "PUG_MENU_ALRDYVOTE" );
         return;
     }
     
-    g_kickid = tid;
-    g_kickagree = 0;
-    get_user_name( tid, voted, 31 );
-    get_user_name( id, kicker, 31 );
-    team = cs_get_user_team( tid );
+    const T_VOTEKICK = 10;
+    static teamname[32], szMenu[256], len, CsTeams: team;
+    
+    g_bIsOnVote = true;
+    g_tskidOnVote = kicker + OFFSET_COUNT_MENU_VOTEKICK;
+    g_kickid = kickid;
+    g_kickagree = g_countVoteKick = 0;
+    arrayset( g_bKickVoted, false, sizeof( g_bKickVoted ) );
+    team = g_teamHash[kickid];
     switch( team ) {
         case CS_TEAM_T: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_TNAME" );
         case CS_TEAM_CT: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_CTNAME" );
         case CS_TEAM_SPECTATOR: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_SPECNAME" );
     }
-    len = formatex( szMenu, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_KICKASKTITLE", kicker, teamname, voted );
+    len = formatex( szMenu, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_KICKASKTITLE", g_name[kicker], teamname, g_name[kickid] );
     len += formatex( szMenu[len], 255 - len, "\r1.  \w%L^n", LANG_SERVER, "PUG_MENU_KICKAGREE" );
     len += formatex( szMenu[len], 255 - len, "\r2.  \w%L", LANG_SERVER, "PUG_MENU_KICKREJ" );
-    show_menu( 0, 3, szMenu, 10, "#PUG_Menu_VoteKick" );
-    set_task( 10.0, "MenuJudgeAskKick" );
+    len += formatex( szMenu[len], 255 - len, "^n^n%L\r", LANG_SERVER, "PUG_MENU_COUNTDOWNPROMPT" );
     
-    return;
+    g_countdownVoteKick = T_VOTEKICK + 1;
+    MenuShowAskKick( szMenu, g_tskidOnVote );
+    set_task( 1.0, "MenuShowAskKick", g_tskidOnVote, szMenu, sizeof( szMenu ), "a", T_VOTEKICK );
+
+    return;    
 }
-//--------------------------------------------------------------------
-public MenucmdAskKick( id, key )
+
+public MenuShowAskKick( const szt[], tskid )
 {
-    static name[32];
+    static szMenu[256], id, i;
     
-    get_user_name( id, name, 31 );
-    if( key == 0 ) {
-        g_kickagree++;
-        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_AGREEKICKMSG", name );
+    if( --g_countdownVoteKick > 0 ) {
+        formatex( szMenu, 255, "%s %d", szt, g_countdownVoteKick );
+        for( i = 0; i < MAX_PLAYERS; i++ ) {
+            id = i + 1;
+            if( g_teamHash[id] != CS_TEAM_UNASSIGNED && !g_bKickVoted[id] )
+                show_menu( id, 3, szMenu, 1, "#PUG_Menu_VoteKick" );
+        }
     }
     else
-        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_REJKICKMSG", name );
+        MenuJudgeAskKick();
         
     return;
 }
 
-public MenuJudgeAskKick()
+public MenucmdAskKick( id, key )
 {
-    new tot = get_playersnum( 0 );
-    new Float: ratio;
-    static name[32];
-        
-    ratio = float( g_kickagree ) / float( tot );
-    if( ratio >= 0.5 ) {
-        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_KICKRESAGREE" );
-        get_user_name( g_kickid, name, 31 );
-        server_cmd( "kick ^"%s^"", name );
+    if( key == 0 ) {
+        g_kickagree++;
+        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_AGREEKICKMSG", g_name[id] );
     }
     else
-        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_KICKRESREJ" );
+        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_REJKICKMSG", g_name[id] );
+    g_bKickVoted[id] = true;
+    if( ++g_countVoteKick >= get_playersnum( 0 ) ) {
+        remove_task( g_tskidOnVote, 0 );
+        MenuJudgeAskKick();
+    }
+        
+    return;
+}
+
+MenuJudgeAskKick()
+{
+    new tot = get_playersnum( 0 );
+    new Float: ratio = float( g_kickagree ) / float( tot );
+
+    if( ratio >= 0.5 ) {
+        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESAGREE" );
+        server_cmd( "kick ^"%s^"", g_name[g_kickid] );
+    }
+    else
+        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESREJ" );
     g_bIsOnVote = false;
     
     return;
@@ -3011,63 +3151,57 @@ public MenuJudgeAskKick()
     Menu Select func    :   MenucmdPlayerMenu
     Result func         :   N/A
 */ 
-public MenuShowPlayerMenu( id )
+MenuBuildPlayerMenu()
 {
-    static Msg[128], szid[2];
-    new hMenu;
+    static Msg[128], tag[2];
+    
+    tag[1] = 0; tag[0] = 0x30;
     
     formatex( Msg, 127, "\y%L", LANG_SERVER, "PUG_MENU_PLTITLE" );
-    hMenu = menu_create( Msg, "MenucmdPlayerMenu" );
-    szid[1] = 0;
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PLVOTEMAP" );
-    szid[0] = 0x30 + 1;
-    menu_additem( hMenu, Msg, szid, ADMIN_ALL );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PLVOTEKICK" );
-    szid[0] = 0x30 + 2;
-    menu_additem( hMenu, Msg, szid, ADMIN_ALL );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_RESTROUND" );
-    szid[0] = 0x30 + 3;
-    menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_ITEMMATCH" );
-    szid[0] = 0x30 + 4;
-    menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHMAP" );
-    szid[0] = 0x30 + 5;
-    menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHKICK" );
-    szid[0] = 0x30 + 6;
-    menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHTEAM" );
-    szid[0] = 0x30 + 7;
-    menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSLAY" );
-    szid[0] = 0x30 + 8;
-    menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHBAN" );
-    szid[0] = 0x30 + 9;
-    menu_additem( hMenu, Msg, szid, ADMIN_ADMIN );
-    menu_addblank( hMenu, 0 );
-    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_EXITNAME" );
-    szid[0] = 0x30;
-    menu_additem( hMenu, Msg, szid, ADMIN_ALL );
-    menu_setprop( hMenu, MPROP_PERPAGE, 0 );
+    g_hmPlayerMenu = menu_create( Msg, "MenucmdPlayerMenu" );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PLVOTEMAP" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ALL );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PLVOTEKICK" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ALL );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_RESTROUND" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ADMIN );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_ITEMMATCH" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ADMIN );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHMAP" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ADMIN );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHKICK" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ADMIN );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHTEAM" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ADMIN );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSLAY" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ADMIN );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHBAN" ); tag[0]++;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ADMIN );
+    menu_addblank( g_hmPlayerMenu, 0 );
+    formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_EXITNAME" ); tag[0] = 0x30;
+    menu_additem( g_hmPlayerMenu, Msg, tag, ADMIN_ALL );
+    menu_setprop( g_hmPlayerMenu, MPROP_PERPAGE, 0 );
+    
+    return;
+}
 
-    menu_display( id, hMenu, 0 );
+public MenuShowPlayerMenu( id )
+{
+    show_menu( id, 0, "^n", 1 );
+    menu_display( id, g_hmPlayerMenu );
     
     return PLUGIN_HANDLED;
 }
 
 public MenucmdPlayerMenu( id, menu, item )
 {
-    static voted[32], tid, kicker[32];  
-    new _access, item_callback;
+    static info[2], name[2], _access, _callback, key;  
     
-    menu_item_getinfo( menu, item, _access, voted, 31, kicker, 31, item_callback );
-    menu_destroy( menu );
-    tid = str_to_num( voted );
+    menu_item_getinfo( menu, item, _access, info, 1, name, 1, _callback );
+    key = str_to_num( info );
     
-    switch( tid ) {
-        case 1: MenuShowVoteMap( id );
+    switch( key ) {
+        case 1: MenuSetVoteMap( id );
         case 2: MenuShowVoteKick( id );
         case 3: if( !StatLive() ) server_cmd( "sv_restartround 1" );
         case 4: client_cmd( id, "hp_matchmenu" );
@@ -3295,7 +3429,12 @@ public plugin_cfg()
     set_task( 1.0, "CheckHostName" );
     
     LoadSettings();
-    readMap();    
+    readMap();
+    
+    MenuBuildPickTeam();
+    MenuBuildMatchMenu();
+    MenuBuildPlayerMenu();
+     
     EnterWarm();
     
     return;
@@ -3329,7 +3468,7 @@ public plugin_init()
     register_clcmd( "jointeam", "clcmdJoinTeam", ADMIN_ALL, " - hook teamchange of user" );
     register_clcmd( "chooseteam", "clcmdChooseTeam", ADMIN_ALL, " - hook choose team" );
     register_clcmd( "hp_matchmenu", "MenuShowMatchMenu", PLUGIN_ACCESS, " - show admin menu" );
-    register_clcmd( "say votemap", "MenuShowVoteMap", ADMIN_ALL, " - hold a vote for change map" );
+    register_clcmd( "say votemap", "MenuSetVoteMap", ADMIN_ALL, " - hold a vote for change map" );
     register_clcmd( "say votekick", "MenuShowVoteKick", ADMIN_ALL, " - hold a vote for kick player" );
     register_clcmd( "say menu", "MenuShowPlayerMenu", ADMIN_ALL, " - open player menu" );
     register_clcmd( "say_team menu", "MenuShowPlayerMenu", ADMIN_ALL, " - open player menu" );
@@ -3367,7 +3506,6 @@ public plugin_init()
     
     register_menu( "#PUG_Menu_WinKnifeRound", 0x3ff, "MenucmdPickTeam", 0 );
     register_menu( "#PUG_Menu_IfAgreeToSwap", 0x3ff, "MenucmdSwapAsk", 0 );
-    register_menu( "#PUG_Menu_AdminMenu", 0x3ff, "MenucmdMatchMenu", 0 );
     register_menu( "#PUG_Menu_VoteMap", 0x3ff, "MenucmdVoteMap", 0 );
     register_menu( "#PUG_Menu_VoteKick", 0x3ff, "MenucmdAskKick", 0 );
     
