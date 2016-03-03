@@ -106,7 +106,7 @@ const   r_MENU_MODEL_SELECT         =   3;
 
 
 new const PLUGIN_NAME[]     =   "HUST PUG";
-new const PLUGIN_VERSION[]  =   "1.4.1";
+new const PLUGIN_VERSION[]  =   "1.4.1a5";
 new const PLUGIN_AUTHOR[]   =   "real";
 
 // need flag "b" to control the plugin
@@ -138,13 +138,12 @@ const   TASKID_SHOWREADY    =   OFFSET_HUDMSG + ( 1 << 0 );
 const   TASKID_SHOWNOTIFY   =   OFFSET_HUDMSG + ( 1 << 1 );
 const   TASKID_SHOWSCORE    =   OFFSET_HUDMSG + ( 1 << 2 );
 
-// HUD message channel setting
-const   CH_SCOREBOARD       =   1;
-const   CH_RDYLIST          =   2;
-const   CH_NOTIFY           =   1;
-const   CH_SHOWMONEY        =   3;
-const   CH_COUNTDOWN        =   4;
-const   CH_5LINK            =   2;
+// Sync HUD Obj handles
+new     g_hsyncReadyList;
+new     g_hsyncScoreBoard;
+new     g_hsyncNotify;
+new     g_hsyncShowMoney;
+new     g_hsync5Link;
 
 // HUD message positions
 new const Float: HUD_POS_RDYLIST[]      =   { 0.7, 0.2 };
@@ -293,6 +292,7 @@ new     g_msgidRoundTime;       // message id for "RoundTime" Msg
 new     g_msgidWeapPickup;      // message id for "WeapPickup" Msg
 new     g_msgidCurWeapon;       // message id for "CurWeapon" Msg
 new     g_msgidTextMsg;         // TextMsg
+new     g_msgidClCorpse;        // ClCorpse
 
 // some message handles
 new     g_hmsgHideWeapon;       // handle for registered message "HideWeapon"
@@ -401,12 +401,12 @@ public hamPostDeath5Link( id )
         set_task( float( talktime ), "RemoveTalkFlag", id + OFFSET_5LINK );
         g_5linkcount[id] = talktime;
         set_task( 1.0, "Show5LinkCountdown", id + OFFSET_5LINK, _, _, "a", talktime );
-        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 1.0, 0.0, 0.0, CH_5LINK );
-        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_MSG", talktime );
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 1.0, 0.0, 0.0, -1 );
+        ShowSyncHudMsg( id, g_hsync5Link, "%L", LANG_SERVER, "TEAM_TALK_MSG", talktime );
     }
     else {
-        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 5.0, 0.0, 0.0, CH_5LINK );
-        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_MSG_PERM" );
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 5.0, 0.0, 0.0, -1 );
+        ShowSyncHudMsg( id, g_hsync5Link, "%L", LANG_SERVER, "TEAM_TALK_MSG_PERM" );
     }
     
     return HAM_IGNORED;
@@ -430,12 +430,12 @@ public Show5LinkCountdown( tskid )
     new id = tskid - OFFSET_5LINK;
     
     if( --g_5linkcount[id] > 0 ) {
-        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 1.0, 0.0, 0.0, CH_5LINK );
-        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_MSG", g_5linkcount[id] );
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 1.0, 0.0, 0.0, -1 );
+        ShowSyncHudMsg( id, g_hsync5Link, "%L", LANG_SERVER, "TEAM_TALK_MSG", g_5linkcount[id] );
     }
     else {
-        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 5.0, 0.0, 0.0, CH_5LINK );
-        show_hudmessage( id, "%L", LANG_SERVER, "TEAM_TALK_OVERMSG" );
+        set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_5LINK[0], HUD_POS_5LINK[1], 0, 0.0, 5.0, 0.0, 0.0, -1 );
+        ShowSyncHudMsg( id, g_hsync5Link, "%L", LANG_SERVER, "TEAM_TALK_OVERMSG" );
     }
     
     return;
@@ -699,8 +699,8 @@ RefreshReadyList()
 */
 public ShowReadyList( const index[] )
 {
-    set_hudmessage( 0xff, 0xff, 0x00, HUD_POS_RDYLIST[0], HUD_POS_RDYLIST[1], 0, 0.0, HUD_INT_RDYLIST, 0.0, 0.0, CH_RDYLIST );
-    show_hudmessage( index[0], "%s", g_szReadyList );
+    set_hudmessage( 0xff, 0xff, 0x00, HUD_POS_RDYLIST[0], HUD_POS_RDYLIST[1], 0, 0.0, HUD_INT_RDYLIST, 0.0, 0.0, -1 );
+    ShowSyncHudMsg( index[0], g_hsyncReadyList, g_szReadyList );
     
     return;
 }
@@ -719,8 +719,8 @@ public ShowReadyList( const index[] )
 */
 public ShowNotification( const index[] )
 {
-    set_hudmessage( 0x00, 0xff, 0xff, HUD_POS_NOTIFY[0], HUD_POS_NOTIFY[1], 0, 0.0, HUD_INT_NOTIFY, 0.0, 0.0, CH_NOTIFY );
-    show_hudmessage( index[0], "%L", LANG_SERVER, "PUG_WARM_NOTIFY" );
+    set_hudmessage( 0x00, 0xff, 0xff, HUD_POS_NOTIFY[0], HUD_POS_NOTIFY[1], 0, 0.0, HUD_INT_NOTIFY, 0.0, 0.0, -1 );
+    ShowSyncHudMsg( index[0], g_hsyncNotify, "%L", LANG_SERVER, "PUG_WARM_NOTIFY" );
     
     return;
 }
@@ -768,8 +768,8 @@ RefreshHUDScore()
 */
 public ShowHUDScore( const index[] )
 {
-    set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_SCOREBOARD[0], HUD_POS_SCOREBOARD[1], 0, 0.0, HUD_INT_SCOREBOARD, 0.0, 0.0, CH_SCOREBOARD );
-    show_hudmessage( index[0], g_szHUDScore );
+    set_hudmessage( 0xff, 0xff, 0xff, HUD_POS_SCOREBOARD[0], HUD_POS_SCOREBOARD[1], 0, 0.0, HUD_INT_SCOREBOARD, 0.0, 0.0, -1 );
+    ShowSyncHudMsg( index[0], g_hsyncScoreBoard, g_szHUDScore );
     
     return;
 }
@@ -855,12 +855,12 @@ public ShowTeamMoney()
         id = Playerid[i];
         switch( team[i] ) {
             case CS_TEAM_CT: {
-                set_hudmessage( 0x00, 0x00, 0xff, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, CH_SHOWMONEY );
-                show_hudmessage( id, MsgCT );
+                set_hudmessage( 0x00, 0x00, 0xff, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, -1 );
+                ShowSyncHudMsg( id, g_hsyncShowMoney, MsgCT );
             }
             case CS_TEAM_T:{
-                set_hudmessage( 0xff, 0x00, 0x00, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, CH_SHOWMONEY );
-                show_hudmessage( id, MsgT );
+                set_hudmessage( 0xff, 0x00, 0x00, HUD_POS_SHOWMONEY[0], HUD_POS_SHOWMONEY[1], 0, 0.0, holdtime, 0.5, 1.0, -1 );
+                ShowSyncHudMsg( id, g_hsyncShowMoney, MsgT );
             }
         }
     }
@@ -1700,6 +1700,7 @@ fnTeamSelect( id, argn )
             time = get_gametime();
             ft = get_pcvar_float( g_pcFreezeTime );
             if( time - g_GameTime > ft && is_user_alive( id ) ) {
+                set_msg_block( g_msgidClCorpse, BLOCK_ONCE );
                 user_kill( id );
                 cs_set_user_team( id, CS_TEAM_SPECTATOR, CS_DONTCHANGE );
                 PutPlayer( id, g_teamHash[id], CS_TEAM_SPECTATOR );
@@ -2763,15 +2764,18 @@ MenuJudgeSwapAsk( tid )
     
     if( g_SwapJudge[tid] ) {
         if( team2 == CS_TEAM_SPECTATOR ) {
+            set_msg_block( g_msgidClCorpse, BLOCK_ONCE );
             user_kill( id );
+            cs_set_user_team( id, team2, CS_DONTCHANGE );
+            PutPlayer( id, team1, team2 );
             client_cmd( tid, "jointeam ^"%s^"", tn );
         }
-        else
+        else {
             cs_set_user_team( tid, team1, CS_DONTCHANGE );
-        cs_set_user_team( id, team2, CS_DONTCHANGE );
-        
-        PutPlayer( id, team1, team2 );
-        PutPlayer( tid, team2, team1 );
+            cs_set_user_team( id, team2, CS_DONTCHANGE );
+            PutPlayer( id, team1, team2 );
+            PutPlayer( tid, team2, team1 );
+        }
         
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREED" );
         client_print( tid, print_center, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREE" );
@@ -2841,7 +2845,7 @@ public MenucmdMatchMenu( id, menu, item )
 {       
     static info[2], name[2], _access, _callback, key;
     
-    if( menu == MENU_EXIT ) return;
+    if( item == MENU_EXIT ) return;
     menu_item_getinfo( menu, item, _access, info, 1, name, 1, _callback );
     key = str_to_num( info );
     switch( key ) {
@@ -3134,11 +3138,11 @@ MenuJudgeAskKick()
     new Float: ratio = float( g_kickagree ) / float( tot );
 
     if( ratio >= 0.5 ) {
-        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESAGREE" );
+        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESAGREE", ratio * 100.0 );
         server_cmd( "kick ^"%s^"", g_name[g_kickid] );
     }
     else
-        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESREJ" );
+        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESREJ", ratio * 100.0 );
     g_bIsOnVote = false;
     
     return;
@@ -3323,6 +3327,7 @@ public ForceHalfR3( id, level, cid )
             }
             
             if( g_StatusNow == STATUS_INTER ) remove_task( TASKID_SHOWREADY, 0 );
+                
             EnterFirstHalf();
         }
         case STATUS_S_HALF: {
@@ -3420,6 +3425,7 @@ public client_infochanged( id )
     get_user_info( id, "name", name, 31 );
     if( !equal( name, g_name[id] ) ) 
         formatex( g_name[id], 31, "%s", name );
+    if( !StatLive() ) RefreshReadyList();
     
     return PLUGIN_CONTINUE;
 }
@@ -3431,9 +3437,17 @@ public plugin_cfg()
     LoadSettings();
     readMap();
     
+    // pre-build some menus
     MenuBuildPickTeam();
     MenuBuildMatchMenu();
     MenuBuildPlayerMenu();
+    
+    // initialize all Sync HUD Objs
+    g_hsyncReadyList    =   CreateHudSyncObj();
+    g_hsyncScoreBoard   =   CreateHudSyncObj();
+    g_hsyncNotify       =   CreateHudSyncObj();
+    g_hsyncShowMoney    =   CreateHudSyncObj();
+    g_hsync5Link        =   CreateHudSyncObj();
      
     EnterWarm();
     
@@ -3500,6 +3514,7 @@ public plugin_init()
     g_msgidWeapPickup   = get_user_msgid( "WeapPickup" );
     g_msgidCurWeapon    = get_user_msgid( "CurWeapon" );
     g_msgidTextMsg      = get_user_msgid( "TextMsg" );
+    g_msgidClCorpse     = get_user_msgid( "ClCorpse" );
 
     register_message( g_msgidTeamScore, "msgTeamScore" );
     register_message( get_user_msgid( "ShowMenu" ), "msgShowMenu" );
