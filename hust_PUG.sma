@@ -273,6 +273,8 @@ new     g_pcMaxRound;           // hp_maxround
 new     g_pcWarmCfg, g_pcMatchCfg; // hp_warmcfg, hp_matchcfg
 new     g_pcEnable5Link;        // hp_enable5link
 new     g_pcLinkTime;           // hp_linktime
+new     g_pcTeamTTag, g_pcTeamCTTag; // hp_teamttag, hp_teamcttag
+
 new     g_pcAmxShowAct;         // amx_show_activity
 new     g_pcHostName;           // hostname
 new     g_pcFreezeTime;         // mp_freezetime
@@ -313,10 +315,10 @@ new     g_hfwdSetClientListen;
 
 // Player menu related part
 const   MAP_VOTE_NUM        =   9;      // vote map list item num (9 max)
-const   OFFSET_COUNT_MENU_PICKTEAM      =   250500;
-const   OFFSET_COUNT_MENU_SWAPASK       =   251000;
-const   OFFSET_COUNT_MENU_VOTEMAP       =   251500;
-const   OFFSET_COUNT_MENU_VOTEKICK      =   252000;
+const   OFFSET_COUNT_MENU_PICKTEAM      =   OFFSET_MENU +  500;
+const   OFFSET_COUNT_MENU_SWAPASK       =   OFFSET_MENU + 1000;
+const   OFFSET_COUNT_MENU_VOTEMAP       =   OFFSET_MENU + 1500;
+const   OFFSET_COUNT_MENU_VOTEKICK      =   OFFSET_MENU + 2000;
     // pre-built menu bodies and handles
 new     g_szMenuPickTeam[256];
 new     g_hmMatchMenu;              // handle of PUG Match menu
@@ -418,7 +420,7 @@ public hamPostDeath5Link( id )
     This function is using a NORMAL HUD message
     
     HUD params:
-        ├ CHANNEL:    CH_5LINK
+        ├ CHANNEL:    AUTO
         ├ POSITION:   HUD_POS_5LINK[]
         └ COLOR:      #FFFFFF (white)
     
@@ -584,16 +586,19 @@ Float: findHUDPos()
     @param  fmt[]       :   formatted string
     @return none
 */
-ServerSay( const fmt[], any:... )
+ServerSay( idest, const fmt[], any:... )
 {
     static Msg[256];
-    new argn = numargs();
 
-    if( argn == 1 )
+    if( numargs() == 2 )
         formatex( Msg, 255, fmt );
     else
-        vformat( Msg, 255, fmt, 2 );
-    client_print_color( 0, GREY, "^4<%s> ^3%s", g_hostname, Msg );
+        vformat( Msg, 255, fmt, 3 );
+    
+    if( idest == 0 )
+        client_print_color( 0, GREY, "^4<%s> ^3%s", g_hostname, Msg );
+    else
+        client_print_color( idest, GREY, "^4<%s> ^1%s", g_hostname, Msg );
     
     return;
 }
@@ -690,7 +695,7 @@ RefreshReadyList()
     player list. The list uses normal HUD system.
     
     HUD params:
-        ├ CHANNEL:    CH_RDYLIST
+        ├ CHANNEL:    AUTO
         ├ POSITION:   HUD_POS_RDYLIST[]
         └ COLOR:      #FFFF00 (yellow)
     
@@ -710,7 +715,7 @@ public ShowReadyList( const index[] )
     time. The message uses normal HUD system.
     
     HUD params:
-        ├ CHANNEL:    CH_NOTIFY
+        ├ CHANNEL:    AUTO
         ├ POSITION:   HUD_POS_NOTIFY[]
         └ COLOR:      #00FFFF (cyan)
     
@@ -759,7 +764,7 @@ RefreshHUDScore()
     The message uses normal HUD system.
     
     HUD params:
-        ├ CHANNEL:    CH_SCOREBOARD
+        ├ CHANNEL:    AUTO
         ├ POSITION:   HUD_POS_SCOREBOARD[]
         └ COLOR:      #FFFFFF (white)
     
@@ -818,7 +823,7 @@ readMap()
     the team money for corresponding teams. This function use a normal HUD message.
     
     HUD params:
-        ├ CHANNEL:    CH_SHOWMONEY
+        ├ CHANNEL:    AUTO
         ├ POSITION:   HUD_POS_SHOWMONEY[]
         └ COLOR:      #FF0000 (red) TERRORISTs
                       #0000FF (blue) CTs
@@ -941,7 +946,7 @@ LoadSettings()
     if( file_exists( fpath ) )
         server_cmd( "exec ^"%s^"", fpath );
     else
-        ServerSay( "%L", LANG_SERVER, "PUG_PLUGINCFG_NOTFOUND", PUG_CONFIG_FILE );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_PLUGINCFG_NOTFOUND", PUG_CONFIG_FILE );
         
     return;
 }
@@ -1030,7 +1035,7 @@ public SwapTeam()
     FireMsgTeamScore( CS_TEAM_CT, sc );
     if( task_exists( TASKID_SHOWSCORE, 0 ) ) RefreshHUDScore();
     
-    ServerSay( "%L", LANG_SERVER, "PUG_TEAMSWAP_FINISH" );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_TEAMSWAP_FINISH" );
     
     return;
 }
@@ -1613,14 +1618,14 @@ public fwdSetInfiniteBuyTime( const szcvar[] )
 //          └ SwapCenterCountDown
 //      → PlayerReady
 //          ├ findHUDPos
-//          ├ ShowReadyList
+//          ├ RefreshReadyList
 //          └ AutoStart ←
 //              ├ StopWarm
 //              ├ EnterKnifeRound
 //              ├ EnterFirstHalf
 //              └ EnterSecondHalf
 //      → PlayerUNReady
-//          ├ ShowReadyList
+//          ├ RefreshReadyList
 //          └ findHUDPos
 //==============================================================================
 
@@ -1696,7 +1701,12 @@ fnTeamSelect( id, argn )
             
             return PLUGIN_HANDLED;
         }
-        case 6: {
+        case 6: if( StatLive() && ( g_teamHash[id] == CS_TEAM_CT || g_teamHash[id] == CS_TEAM_T ) ) {
+            client_cmd( id, "chooseteam" );
+            
+            return PLUGIN_HANDLED;
+        }
+        else {
             time = get_gametime();
             ft = get_pcvar_float( g_pcFreezeTime );
             if( time - g_GameTime > ft && is_user_alive( id ) ) {
@@ -2021,14 +2031,14 @@ public EnterWarm()
     len += formatex( fpath[len], 63 - len, "/%s/%s", PUG_CONFIG_DIR, fname );
     if( file_exists( fpath ) ) {  
         server_cmd( "exec ^"%s^"", fpath );
-        ServerSay( "%L", LANG_SERVER, "PUG_WARMCFG_LOADED", fname );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_WARMCFG_LOADED", fname );
     }
     else if( file_exists( fname ) ) {
         server_cmd( "exec ^"%s^"", fname );
-        ServerSay( "%L", LANG_SERVER, "PUG_WARMCFG_LOADED", fname );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_WARMCFG_LOADED", fname );
     }
     else
-        ServerSay( "%L", LANG_SERVER, "PUG_CFGNOTFOUND", fname );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_CFGNOTFOUND", fname );
 
     server_cmd( "sv_restartround 1" );
     
@@ -2065,14 +2075,14 @@ StopWarm()
     len += formatex( fpath[len], 63 - len, "/%s/%s", PUG_CONFIG_DIR, fname );
     if( file_exists( fpath ) ) {  
         server_cmd( "exec ^"%s^"", fpath );
-        ServerSay( "%L", LANG_SERVER, "PUG_MATCHCFG_LOADED", fname );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_MATCHCFG_LOADED", fname );
     }
     else if( file_exists( fname ) ) {
         server_cmd( "exec ^"%s^"", fname );
-        ServerSay( "%L", LANG_SERVER, "PUG_MATCHCFG_LOADED", fname );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_MATCHCFG_LOADED", fname );
     }
     else
-        ServerSay( "%L", LANG_SERVER, "PUG_CFGNOTFOUND", fname );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_CFGNOTFOUND", fname );
     
     return;
 }
@@ -2089,7 +2099,7 @@ public EnterKnifeRound()
     g_GameTime = get_gametime();
     
     g_Score[0][0] = g_Score[0][1] = g_Score[1][0] = g_Score[1][1] = 0;
-    ServerSay( "%L", LANG_SERVER, "PUG_KNIFEROUND_MSG" );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_KNIFEROUND_MSG" );
     server_cmd( "sv_restartround 3" );
     set_task( 5.0, "KnifeRoundMsg" );
     
@@ -2110,7 +2120,7 @@ public EnterKnifeRound()
 */
 public KnifeRoundMsg()
 {
-    for( new i = 0; i < 4; i++ ) ServerSay( "%L", LANG_SERVER, "PUG_KNIFEROUND_STR" );
+    for( new i = 0; i < 4; i++ ) ServerSay( 0, "%L", LANG_SERVER, "PUG_KNIFEROUND_STR" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_KNIFEROUND_HUD" );
     
@@ -2167,7 +2177,7 @@ public R3Function( tskid )
     new Float: inter = t * 2.0;
     
     if( t <= 3 ) {
-        ServerSay( "%L", LANG_SERVER, "PUG_R3MSG", t );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_R3MSG", t );
         server_cmd( "sv_restartround %d", t );
         set_task( inter, "R3Function", tskid + 1 );
     }
@@ -2197,7 +2207,7 @@ public ScrollServerSay( tskid )
     arrayset( p2, '-', i );
     p2[i] = 0;
     formatex( Msg, 127, "[%s%L%s]", p1, LANG_SERVER, "PUG_HALFSTART_SCRL", p2 );
-    ServerSay( Msg );
+    ServerSay( 0, Msg );
     count = ( count + 1 ) % width;
     
     return;
@@ -2220,7 +2230,7 @@ public EnterFirstHalf()
     g_StatusNow = STATUS_F_HALF;
     
     g_Score[0][0] = g_Score[0][1] = g_Score[1][0] = g_Score[1][1] = 0;
-    ServerSay( "%L", LANG_SERVER, "PUG_FHSTART_MSG" );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_FHSTART_MSG" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_FHSTART_MSG" );
 
@@ -2246,8 +2256,8 @@ public EnterFirstHalf()
 */
 EnterIntermission()
 {
-    ServerSay( "%L", LANG_SERVER, "PUG_FHEND_MSG" , g_Score[0][0], g_Score[1][0] );
-    ServerSay( "%L", LANG_SERVER, "PUG_DONTCHANGETEAM" );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_FHEND_MSG" , g_Score[0][0], g_Score[1][0] );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_DONTCHANGETEAM" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 3.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_FHEND_HUD", g_Score[0][0], g_Score[1][0] );
     set_task( 2.0, "SwapTeam" );
@@ -2281,7 +2291,7 @@ public EnterSecondHalf()
 {
     g_Score[0][1] = g_Score[1][1] = 0;
     g_StatusNow = STATUS_S_HALF;
-    ServerSay( "%L", LANG_SERVER, "PUG_SHSTART_MSG" );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_SHSTART_MSG" );
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_SHSTART_MSG" );
     
@@ -2312,7 +2322,7 @@ MatchWin( CsTeams: team )
     }
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHEND_HUD", g_Score[0][0] + g_Score[0][1], g_Score[1][0] + g_Score[1][1], teamname );
-    ServerSay( "%L", LANG_SERVER, "PUG_MATCHEND_MSG", g_Score[0][0] + g_Score[0][1], g_Score[1][0] + g_Score[1][1] );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_MATCHEND_MSG", g_Score[0][0] + g_Score[0][1], g_Score[1][0] + g_Score[1][1] );
     
     set_task( 5.0, "EnterWarm" );
     
@@ -2335,7 +2345,7 @@ MatchDraw()
 {
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHDRAW_HUD", g_MaxRound, g_MaxRound );
-    ServerSay( "%L", LANG_SERVER, "PUG_MATCHDRAW_MSG", g_MaxRound, g_MaxRound );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_MATCHDRAW_MSG", g_MaxRound, g_MaxRound );
     
     set_task( 5.0, "EnterWarm" );
     
@@ -2584,7 +2594,7 @@ public MenucmdPickTeam( id, key )
     }
     else
         formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PICKTEAMOP2RES", name );
-    ServerSay( Msg );
+    ServerSay( 0, Msg );
     if( g_teamHash[id] == CS_TEAM_T ) pnum = g_Tnum; else pnum = g_Cnum;
     
     if( g_countPickTeam >= pnum ) {
@@ -2598,11 +2608,11 @@ public MenucmdPickTeam( id, key )
 MenuJudgePickTeamVote()
 {
     if( g_mPickTeamAgree > 2 ) {
-        ServerSay( "%L", LANG_SERVER, "PUG_VOTESWAP" );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_VOTESWAP" );
         SwapTeam();
     }
     else
-        ServerSay( "%L", LANG_SERVER, "PUG_VOTENOTSWAP" );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_VOTENOTSWAP" );
         
     g_bIsOnVote = false; // remove vote on flag
     set_task( 1.0, "EnterFirstHalf" );
@@ -2641,7 +2651,7 @@ MenuShowSwapMenu( id )
     static szMenuTitle[64], name[32], szid[3], Msg[128];
     
     if( g_SwapRequest[id] != 0 ) {
-        client_print( id, print_chat, "%L", LANG_SERVER, "PUG_MENU_ALRDYRQSWAP" );
+        client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_ALRDYRQSWAP" );
         return;
     }
     
@@ -2671,7 +2681,7 @@ MenuShowSwapMenu( id )
     menu_setprop( hSwapMenu, MPROP_NEXTNAME, Msg );
     formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PREVPAGE" );
     menu_setprop( hSwapMenu, MPROP_BACKNAME, Msg );
-    show_menu( id, 0, "^n", 1 );
+
     menu_display( id, hSwapMenu, 0 );
     
     return;
@@ -2688,7 +2698,7 @@ public MenucmdSwapMenu( id, menu, item )
     if( item == MENU_EXIT ) return;
     
     if( g_SwapBeRQ[tid] != 0 ) {
-        client_print( id, print_chat, "%L", LANG_SERVER, "PUG_MENU_SWAPCHOICEINVALID" );
+        client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_SWAPCHOICEINVALID" );
         return;
     }
     
@@ -2712,7 +2722,7 @@ MenuSetSwapAsk( tid )
         case CS_TEAM_T: formatex( tn, 15, "%L", LANG_SERVER, "PUG_TNAME" );
         case CS_TEAM_CT: formatex( tn, 15, "%L", LANG_SERVER, "PUG_CTNAME" );
     }
-    ServerSay( "%L", LANG_SERVER, "PUG_MENU_SWAPRQMSG", name1, name2 );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_SWAPRQMSG", name1, name2 );
     len = formatex( szMenu, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_SWAPASKTITLE", tn, name1 );
     len += formatex( szMenu[len], 255 - len, "\r1.  \w%L^n", LANG_SERVER, "PUG_MENU_AGREESWAP" );
     len += formatex( szMenu[len], 255 - len, "\r2.  \w%L^n^n", LANG_SERVER, "PUG_MENU_REJSWAP" );
@@ -2777,16 +2787,16 @@ MenuJudgeSwapAsk( tid )
             PutPlayer( tid, team2, team1 );
         }
         
-        client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREED" );
-        client_print( tid, print_center, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREE" );
+        ServerSay( id, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREED" );
+        ServerSay( tid, "%L", LANG_SERVER, "PUG_MENU_SWAPAGREE" );
         get_user_name( id, name1, 31 );
         get_user_name( tid, name2, 31 );
         set_dhudmessage( 0x00, 0xff, 0xff, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
         show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MENU_SWAPFINISH", name1, name2 );
     }
     else {
-        client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_REJSWAP" );
-        client_print( tid, print_center, "%L", LANG_SERVER, "PUG_MENU_REJSWAP" );
+        ServerSay( id, "%L", LANG_SERVER, "PUG_MENU_REJSWAP" );
+        ServerSay( tid, "%L", LANG_SERVER, "PUG_MENU_REJSWAP" );
     }
     
     // remove RQ flags for both players
@@ -2835,7 +2845,6 @@ public MenuShowMatchMenu( id, level, cid )
 {
     if( !cmd_access( id, level, cid, 1 ) ) return PLUGIN_HANDLED;
 
-    show_menu( id, 0, "^n", 1 );
     menu_display( id, g_hmMatchMenu );
     
     return PLUGIN_HANDLED;
@@ -2954,7 +2963,7 @@ public MenucmdVoteMap( id, key )
     ArrayGetString( g_Maps, pos, mapname, 31 );
     g_VoteMapCount[index]++;
     g_bMapVoted[id] = true;
-    ServerSay( "%L", LANG_SERVER, "PUG_MENU_VOTEDMSG", g_name[id], mapname );
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_VOTEDMSG", g_name[id], mapname );
     if( ++g_countVoteMap > get_playersnum( 0 ) ) {
         remove_task( g_tskidOnVote, 0 );
         MenuJudgeVoteMap();
@@ -2976,7 +2985,7 @@ public MenuJudgeVoteMap()
     g_bIsOnVote = false;
     
     if( maxv == 0 ) {
-        ServerSay( "%L", LANG_SERVER, "PUG_MENU_INVALIDVOTE" );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_INVALIDVOTE" );
         return;
     }
     
@@ -2986,7 +2995,7 @@ public MenuJudgeVoteMap()
     }
     else
         formatex( mapname, 31, "%L", LANG_SERVER, "PUG_MENU_EXTENDCURMAP" );
-    ServerSay( "%L", LANG_SERVER, "PUG_MENU_VOTEMAPRES", mapname );        
+    ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_VOTEMAPRES", mapname );        
     
     return;
 }
@@ -3043,7 +3052,7 @@ public MenuShowVoteKick( tid )
     menu_setprop( hMenu, MPROP_NEXTNAME, Msg );
     formatex( Msg, 127, "%L", LANG_SERVER, "PUG_MENU_PREVPAGE" );
     menu_setprop( hMenu, MPROP_BACKNAME, Msg );
-    show_menu( tid, 0, "^n", 1 );
+
     menu_display( tid, hMenu, 0 );
     
     return PLUGIN_HANDLED;
@@ -3119,10 +3128,10 @@ public MenucmdAskKick( id, key )
 {
     if( key == 0 ) {
         g_kickagree++;
-        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_AGREEKICKMSG", g_name[id] );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_AGREEKICKMSG", g_name[id] );
     }
     else
-        client_print( 0, print_chat, "%L", LANG_SERVER, "PUG_MENU_REJKICKMSG", g_name[id] );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_REJKICKMSG", g_name[id] );
     g_bKickVoted[id] = true;
     if( ++g_countVoteKick >= get_playersnum( 0 ) ) {
         remove_task( g_tskidOnVote, 0 );
@@ -3138,11 +3147,11 @@ MenuJudgeAskKick()
     new Float: ratio = float( g_kickagree ) / float( tot );
 
     if( ratio >= 0.5 ) {
-        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESAGREE", ratio * 100.0 );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_KICKRESAGREE", ratio * 100.0 );
         server_cmd( "kick ^"%s^"", g_name[g_kickid] );
     }
     else
-        ServerSay( "%L", LANG_SERVER, "PUG_MENU_KICKRESREJ", ratio * 100.0 );
+        ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_KICKRESREJ", ratio * 100.0 );
     g_bIsOnVote = false;
     
     return;
@@ -3191,7 +3200,6 @@ MenuBuildPlayerMenu()
 
 public MenuShowPlayerMenu( id )
 {
-    show_menu( id, 0, "^n", 1 );
     menu_display( id, g_hmPlayerMenu );
     
     return PLUGIN_HANDLED;
@@ -3255,7 +3263,7 @@ public ForceStart( id, level, cid )
             case 2: 
                 formatex( Msg, 127, "%L", LANG_SERVER, "PUG_FORCESTART2", g_name[id] );
         }
-        ServerSay( Msg );
+        ServerSay( 0, Msg );
         set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
         show_dhudmessage( 0, Msg );
         
@@ -3291,7 +3299,7 @@ public ForceReR3( id, level, cid )
     }
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, Msg );
-    ServerSay( Msg );
+    ServerSay( 0, Msg );
     
     if( g_StatusNow == STATUS_S_HALF ) SwapTeam();
     EnterFirstHalf();
@@ -3343,7 +3351,7 @@ public ForceHalfR3( id, level, cid )
     }
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, Msg );
-    ServerSay( Msg );
+    ServerSay( 0, Msg );
     
     return PLUGIN_HANDLED;
 }
@@ -3370,7 +3378,7 @@ public ForceStop( id, level, cid )
     }
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, Msg );
-    ServerSay( Msg );
+    ServerSay( 0, Msg );
     
     set_task( 3.0, "EnterWarm" );
     
@@ -3394,7 +3402,7 @@ public ForceSwap( id, level, cid )
     }
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, Msg );
-    ServerSay( Msg );
+    ServerSay( 0, Msg );
     
     SwapTeam();
     
@@ -3428,6 +3436,14 @@ public client_infochanged( id )
     if( !StatLive() ) RefreshReadyList();
     
     return PLUGIN_CONTINUE;
+}
+
+public plugin_end()
+{
+    menu_destroy( g_hmMatchMenu );
+    menu_destroy( g_hmPlayerMenu );
+    
+    return;
 }
 
 public plugin_cfg()
