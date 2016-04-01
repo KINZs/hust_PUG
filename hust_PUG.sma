@@ -4,7 +4,7 @@
 *
 *   │  Author  :       Chen Shi (aka. real, HUST CSer & NUDT)
 *   │  Contact :       bigbryant@qq.com
-*   │  Version :       1.4.1
+*   │  Version :       1.4.2a1
 *
 *   This plugin is free software; you can redistribute it and/or modify it
 *   under the terms of the GNU General Public License as published by the
@@ -16,7 +16,10 @@
 *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
 *   General Public License for more details.
 *
-*   │  Changelog: 2016-03-02
+*   │  Changelog: 2016-03-31
+*
+*       1.4.2a1 1) use HUDSync Object instead of fixing channel in normal HUD Msgs
+*               2) added some basic log functions (not finished yet)
 *
 *       1.4.1   1) fix all menu bugs
 *               2) minor fixes
@@ -75,21 +78,22 @@
 #include <engine>
 #include <fun>
 
-#tryinclude "colorchat"
-#tryinclude "dhudmessage"
-
 #if AMXX_VERSION_NUM < 181
     #assert "AMX MOD X 1.8.1+ is required, compiling will be terminated..."
     #endinput
 #endif
 
 #if AMXX_VERSION_NUM < 183
+    #tryinclude "colorchat"
+    #tryinclude "dhudmessage"
+
     #if !defined _colorchat_included
         #assert "colorchat.inc required.^nDownload colorchat.inc at https://forums.alliedmods.net/showthread.php?t=94960"
+        #endinput
     #endif
-
     #if !defined _dhudmessage_included
         #assert "dhudmessage.inc required.^nDownload dhudmessage.inc at https://forums.alliedmods.net/showthread.php?t=149210"
+        #endinput
     #endif
 #endif
 
@@ -99,24 +103,34 @@
 
 const   m_iMenu                     =   205;
 const   m_bHasChangeTeamThisRound   =   125;
+const   m_fWeaponState              =   74;
 const   r_MENU_TEAM_SELECT          =   1;
 const   r_MENU_MODEL_SELECT         =   3;
+
+const   XO_WEAPON                   =   4;
+const   WEAPON_STATE_GLOCK_BURST    =   1 << 1;
+const   WEAPON_STATE_FAMAS_BURST    =   1 << 4;
 
 //====PDATA OFFSETS DEFINITION FINISHED=========================================
 
 
 new const PLUGIN_NAME[]     =   "HUST PUG";
-new const PLUGIN_VERSION[]  =   "1.4.1a5";
+new const PLUGIN_VERSION[]  =   "1.4.2a1";
 new const PLUGIN_AUTHOR[]   =   "real";
 
 // need flag "b" to control the plugin
 new const PLUGIN_ACCESS     =   ADMIN_RESERVATION;
 
+#if AMXX_VERSION_NUM < 183
 // max player supported
 const   MAX_PLAYERS         =   32;
+#endif
+
+new g_SvMaxPlayers;
 
 // default config file sub directory
 new const PUG_CONFIG_DIR[]  =   "hustpug";
+new const PUG_LOG_DIR[]     =   "log";
 new const PUG_CONFIG_FILE[] =   "hustpug.cfg";
 
 // Max Director HUD NUM
@@ -247,9 +261,13 @@ const   HW_HIDE_TIMER_FLAG  =   ( 1 << 4 );
 // global variable to record status now
 new     g_StatusNow;
 
+// handle of log file
+new     g_hlogfile;
+
 // global message strings
 new     g_szHUDScore[256];                      // string of HUD score
 new     g_szReadyList[512];                     // string of ready list
+new     g_szTTag[32], g_szCTTag[32];
 
 // array to record ready status of players
 new     bool: g_ready[MAX_PLAYERS + 1];         // array to save ready state of players
@@ -265,6 +283,7 @@ new     g_RoundNum;             // variable to record current match round
 new     g_scorebuff[2];         // score buffer that use to see if team scored
 
 // CVAR pointers
+new     g_pcLog;                // hp_log
 new     g_pcKnifeRound;         // hp_kniferound
 new     g_pcTeamLimit;          // hp_teamlimit
 new     g_pcShowMoney;          // hp_showmoney
@@ -291,17 +310,16 @@ new     g_5linkcount[MAX_PLAYERS + 1];
 new     g_msgidTeamScore;       // message id for "TeamScore" Msg
 new     g_msgidHideWeapon;      // message id for "HideWeapon" Msg
 new     g_msgidRoundTime;       // message id for "RoundTime" Msg
-new     g_msgidWeapPickup;      // message id for "WeapPickup" Msg
 new     g_msgidCurWeapon;       // message id for "CurWeapon" Msg
 new     g_msgidTextMsg;         // TextMsg
 new     g_msgidClCorpse;        // ClCorpse
 
 // some message handles
 new     g_hmsgHideWeapon;       // handle for registered message "HideWeapon"
-new     g_hmsgWeapPickup;       // handle for registered message "WeapPickup"
 new     g_hmsgCurWeapon;        // handle for registered message "CurWeapon"
 
 // some ham forward handles
+new     HamHook: g_hamFwdGetWeap[4];    // handle of hamFwdWeapPickup
 new     HamHook: g_hamPostSpawn;        // handle of HookPlayerSpawnPost
 new     HamHook: g_hamFwdDeath;         // handle of HookPlayerDeathFwd
 new     HamHook: g_hamPostTouch[3];     // handle of Ham_Touch for weaponbox, armoury and weapon_shield
@@ -351,6 +369,61 @@ new     g_hostname[32];                 // hostname of server
 new     Float: g_GameTime;              // global variable to get game time
 
 //====GLOBAL VAR DEFINITION FINISHED============================================
+
+//==============================================================================
+//  ┌───────────────────────────────┐
+//  │  LOG MATCH RELATED FUNCTIONS  │
+//  └───────────────────────────────┘
+//      → create_match_log
+//      → stop_match_log
+//      → log_match
+//==============================================================================
+
+create_match_log()
+{
+    static logfilepath[64], len, timenow[32];
+    new lenmax = charsmax( logfilepath );
+    
+    get_time( "%Y%m%d%H%M%S", timenow, 31 );
+    len = get_configsdir( logfilepath, lenmax );
+    len += formatex( logfilepath[len], lenmax - len, "/%s/%s", PUG_CONFIG_DIR, PUG_LOG_DIR );
+    if( !dir_exists( logfilepath ) ) mkdir( logfilepath );
+    len += formatex( logfilepath[len], lenmax - len, "/match%s.log", timenow );
+    
+    return fopen( logfilepath, "w" );
+}
+
+stop_match_log( &hfile )
+{
+    if( hfile ) {
+        fputs( hfile, "===============THIS IS THE END OF THIS MATCH LOG===============" );
+        fclose( hfile );
+        hfile = 0;
+    }
+    
+    return;
+}
+
+log_match( hfile, const fmt[], any:... )
+{
+    if( !hfile ) {
+        server_print( "[HUST PUG] ** log_match() error! Invalid file handle!" );
+        return 0;
+    }
+    
+    static timestamp[32], msg[256], printmsg[288];
+    
+    get_time( "[%Y/%m/%d - %H:%M:%S]", timestamp, 31 );
+    if( numargs() <= 2 )
+        formatex( msg, 255, fmt );
+    else
+        vformat( msg, 255, fmt, 3 );
+    formatex( printmsg, charsmax( printmsg ), "%s %s", timestamp, msg );
+    fputs( hfile, printmsg ); fputc( hfile, '^n' );
+    server_print( printmsg );
+    
+    return 1;
+}
 
 
 //==============================================================================
@@ -453,7 +526,7 @@ public PlayerMute( id )
 {
     static receiver;
     
-    for( new i = 0; i < MAX_PLAYERS; i++ ) {
+    for( new i = 0; i < g_SvMaxPlayers; i++ ) {
         receiver = i + 1;
         if( !is_user_connected( receiver ) || receiver == id ) continue;
         if( g_teamHash[id] != g_teamHash[receiver] ) continue;
@@ -596,9 +669,9 @@ ServerSay( idest, const fmt[], any:... )
         vformat( Msg, 255, fmt, 3 );
     
     if( idest == 0 )
-        client_print_color( 0, GREY, "^4<%s> ^3%s", g_hostname, Msg );
+        client_print_color( 0, 33, "^4<%s> ^3%s", g_hostname, Msg );
     else
-        client_print_color( idest, GREY, "^4<%s> ^1%s", g_hostname, Msg );
+        client_print_color( idest, idest, "^4<%s> ^1%s", g_hostname, Msg );
     
     return;
 }
@@ -634,7 +707,7 @@ FireMsgTeamScore( CsTeams: team, score )
     @param  team        :   team id
     @return none
 */
-FireMsgTextMsg( id, CsTeams: team )
+stock FireMsgTextMsg( id, CsTeams: team )
 {
     message_begin( MSG_ONE, g_msgidTextMsg, _, id );
     {
@@ -659,16 +732,14 @@ FireMsgTextMsg( id, CsTeams: team )
 */
 RefreshReadyList()
 {
-    new i, id, CsTeams: team, itot, iurdy;
-    new len1, len2;
+    static id, CsTeams: team, itot, iurdy, len1, len2;
     static name[32], teamtag[5], rdymsg[512], urdymsg[512];
     
     itot = g_Tnum + g_Cnum;
     iurdy = itot - g_rdy;
     len1 = formatex( rdymsg, 511, "%L", LANG_SERVER, "PUG_RDYLIST_RDYTITLE", g_rdy, itot );
     len2 = formatex( urdymsg, 511, "%L", LANG_SERVER, "PUG_RDYLIST_URDTITLE", iurdy, itot );
-    for( i = 0; i < MAX_PLAYERS; i++ ) {
-        id = i + 1;        
+    for( id = 1; id <= g_SvMaxPlayers; id++ ) {      
         if( !is_user_connected( id ) ) continue;
         team = g_teamHash[id];               
         if( team == CS_TEAM_SPECTATOR || team == CS_TEAM_UNASSIGNED ) continue;
@@ -746,13 +817,13 @@ RefreshHUDScore()
     new Sc = g_Score[1][0] + g_Score[1][1];
     
     switch( g_StatusNow ) {
-        case STATUS_KNIFE: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_KNIFEROUND" );
+        case STATUS_KNIFE:  len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_KNIFEROUND" );
         case STATUS_F_HALF: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_F_HALF" );
         case STATUS_S_HALF: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_S_HALF" );
-        case STATUS_INTER: len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_INTER" );    
+        case STATUS_INTER:  len = formatex( g_szHUDScore, maxl, "%L", LANG_SERVER, "PUG_INTER" );    
     }
-    len += formatex( g_szHUDScore[len], maxl - len, " %L", LANG_SERVER, "PUG_MATCHPROC", g_RoundNum, 2 * g_MaxRound );
-    len += formatex( g_szHUDScore[len], maxl - len, "^n%L", LANG_SERVER, "PUG_SCOREBOARD", St, Sc );
+    len += formatex( g_szHUDScore[len], maxl - len, " %L^n", LANG_SERVER, "PUG_MATCHPROC", g_RoundNum, 2 * g_MaxRound );
+    len += formatex( g_szHUDScore[len], maxl - len, "%s %d : %d %s", g_szTTag, St, Sc, g_szCTTag );
     
     ShowHUDScore( { 0 } );
     
@@ -921,11 +992,9 @@ public eventResetHUD( id )
 //      → InitPlayerInfo
 //      → RefreshReadyList
 //          └ PutPlayer ←
-//      → StripWeapon
 //      → SetAllowGrens
 //          ├ {*fwdSetInfiniteBuyTime*}
 //          ├ {*fwdSetModel*}
-//          ├ {*msgWeapPickup*}
 //          ├ {*msgHideWeapon*}
 //          └ {*fwdSetClListen*}
 //==============================================================================
@@ -980,11 +1049,10 @@ swap_int( &a, &b )
 */
 public SwapTeam()
 {
-    new i, id, CsTeams: team, wbox, st, sc;
+    new id, CsTeams: team, wbox, st, sc;
     new bool: needtrans = false, transid;
     
-    for( i = 0; i < MAX_PLAYERS; i++ ) {
-        id = i + 1;
+    for( id = 1; id <= g_SvMaxPlayers; id++ ) {
         if( !is_user_connected( id ) ) continue;
         team = g_teamHash[id];
         switch( team ) {
@@ -992,7 +1060,7 @@ public SwapTeam()
                 if( is_user_alive( id ) && user_has_weapon( id, CSW_C4 ) ) {
                     engclient_cmd( id, "drop", "weapon_c4" );
                     
-                    new c4ent = engfunc( EngFunc_FindEntityByString, 0, "classname", "weapon_c4" );
+                    new c4ent = engfunc( EngFunc_FindEntityByString, 32, "classname", "weapon_c4" );
                     if( c4ent ) {
                         wbox = pev( c4ent, pev_owner );
                         if( wbox != 0 && wbox != id ) needtrans = true;
@@ -1013,7 +1081,7 @@ public SwapTeam()
     }
     if( !StatLive() ) RefreshReadyList();
     // finish C4 transfer if needed
-    if( needtrans ) {
+    if( needtrans && transid != 0 ) {
         set_pev( wbox, pev_flags, pev( wbox, pev_flags) | FL_ONGROUND );
         dllfunc( DLLFunc_Touch, wbox, transid );
     }   
@@ -1108,31 +1176,6 @@ PutPlayer( id, CsTeams: oldteam, CsTeams: newteam )
 }
 
 /*
-    This function strips specific weapon from a player.
-    
-    @param  id      :   index of player that needs to be striped
-    @param  wid     :   weapon id
-    @return none
-*/
-StripWeapon( id, wid )
-{
-    if( !wid || !is_user_alive( id ) ) return;
-    
-    static wEnt;
-    
-    wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
-    if( !wEnt ) return;
-    
-    if( get_user_weapon( id ) == wid ) 
-        ExecuteHam( Ham_Weapon_RetireWeapon, wEnt );
-    if( !ExecuteHam( Ham_RemovePlayerItem, id, wEnt ) ) return;
-    ExecuteHam( Ham_Item_Kill, wEnt );
-    set_pev( id, pev_weapons, pev( id, pev_weapons ) & ~( 1 << wid ) );
-    
-    return;
-}
-
-/*
     This is function enable/disables most forwards used in warmup time.
     This is a very IMPORTANT FUNCTION!!!!!!
     
@@ -1149,13 +1192,14 @@ SetAllowGrens( bool: bifon )
         unregister_forward( FM_CVarGetFloat, g_hfwdGetCvarFloat, 0 );
         unregister_forward( FM_SetModel, g_hfwdSetModel, 0 );
         // disable Spawn Ham Forward
+        for( new i = 0; i < sizeof( g_hamFwdGetWeap ); i++ )
+            DisableHamForward( g_hamFwdGetWeap[i] );
         DisableHamForward( g_hamPostSpawn );
         DisableHamForward( g_hamFwdDeath );
         DisableHamForward( g_hamPostTouch[0] );
         DisableHamForward( g_hamPostTouch[1] );
         DisableHamForward( g_hamPostTouch[2] );
         // disable WeapPickup message
-        unregister_message( g_msgidWeapPickup, g_hmsgWeapPickup );
         unregister_message( g_msgidCurWeapon, g_hmsgCurWeapon );
         // deal with 5-link forwards
         if( get_pcvar_num( g_pcEnable5Link ) == 1 ) {
@@ -1171,13 +1215,14 @@ SetAllowGrens( bool: bifon )
         g_hfwdGetCvarFloat = register_forward( FM_CVarGetFloat, "fwdSetInfiniteBuyTime", 0 );
         g_hfwdSetModel = register_forward( FM_SetModel, "fwdSetModel", 0 );
         // enabel ham forward spawn
+        for( new i = 0; i < sizeof( g_hamFwdGetWeap ); i++ )
+            EnableHamForward( g_hamFwdGetWeap[i] );
         EnableHamForward( g_hamPostSpawn );
         EnableHamForward( g_hamFwdDeath );
         EnableHamForward( g_hamPostTouch[0] );
         EnableHamForward( g_hamPostTouch[1] );
         EnableHamForward( g_hamPostTouch[2] );
         // register some messages
-        g_hmsgWeapPickup = register_message( g_msgidWeapPickup, "msgWeapPickup" );
         g_hmsgCurWeapon = register_message( g_msgidCurWeapon, "msgCurWeapon" );
         // deal with 5-link forwards
         if( get_pcvar_num( g_pcEnable5Link ) == 1 ) {
@@ -1200,9 +1245,7 @@ SetAllowGrens( bool: bifon )
 //      → hamFwdPlayerDeath
 //          └ DelayRespawn ←
 //      → hamPostPlayerSpawn
-//          ├ RemoveProtect ←
-//          └ StripWeapon
-//      → msgWeapPickup
+//          └ RemoveProtect ←
 //      → msgCurWeapon
 //      → fwdSetModel
 //          └ DelayRemoveEnt ←
@@ -1280,49 +1323,111 @@ public DelayRespawn( tskid )
     g_hamFwdDeath = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 )
 
         g_WarmWeapon[id][0, 1]  0 - primary, 1 - secondary
-        bit ( 1 << 0 ) stands for burst mode
-        bit ( 1 << 1 ) stands for silencer mode
-        weapon id lies to the left begin with bit ( 1 << 2 )
+        bit ( 1 << 0 ) stands for mode set bit flag ( 1 - not set; 0 - set )
+        bit ( 1 << 1 ) stands for burst mode
+        bit ( 1 << 2 ) stands for silence mode
+        weapon id lies to the left begin with bit ( 1 << 3 )
     
     @param  id      :   index of dead player
     @return none
 */
 public hamFwdPlayerDeath( id )
 {
-    new wps[32], wpnum, i;
-    static m4a1, famas, usp, glock;
+    static wEnt, wps[32], wpnum, i;
         
     get_user_weapons( id, wps, wpnum );
     for( i = 0; i < wpnum; i++ ) {
         if( CSW_PRIMARY & ( 1 << wps[i] ) ) {
-            g_WarmWeapon[id][0] = ( wps[i] << 2 );
+            g_WarmWeapon[id][0] = ( wps[i] << 3 );
             switch( wps[i] ) {
                 case CSW_M4A1: {
-                    m4a1 = find_ent_by_owner( 32, "weapon_m4a1", id );
-                    if( cs_get_weapon_silen( m4a1 ) ) g_WarmWeapon[id][0] |= 2;
+                    wEnt = find_ent_by_owner( 32, "weapon_m4a1", id );
+                    g_WarmWeapon[id][0] |= cs_get_weapon_silen( wEnt ) ? 4 : 0;
                 }
                 case CSW_FAMAS: {
-                    famas = find_ent_by_owner( 32, "weapon_famas", id );
-                    if( cs_get_weapon_burst( famas ) ) g_WarmWeapon[id][0] |= 1;
+                    wEnt = find_ent_by_owner( 32, "weapon_famas", id );
+                    g_WarmWeapon[id][0] |= cs_get_weapon_burst( wEnt ) ? 2 : 0;
                 }
             }
+            g_WarmWeapon[id][0] |= ( g_WarmWeapon[id][0] & 6 ? 1 : 0 );
         }
         if( CSW_SECONDARY & ( 1 << wps[i] ) ) {
-            g_WarmWeapon[id][1] = ( wps[i] << 2 );
+            g_WarmWeapon[id][1] = ( wps[i] << 3 );
             switch( wps[i] ) {
                 case CSW_USP: {
-                    usp = find_ent_by_owner( 32, "weapon_usp", id );
-                    if( cs_get_weapon_silen( usp ) ) g_WarmWeapon[id][1] |= 2;
+                    wEnt = find_ent_by_owner( 32, "weapon_usp", id );
+                    g_WarmWeapon[id][1] |= cs_get_weapon_silen( wEnt ) ? 4 : 0;
                 }
                 case CSW_GLOCK18: {
-                    glock = find_ent_by_owner( 32, "weapon_glock18", id );
-                    if( cs_get_weapon_burst( glock ) ) g_WarmWeapon[id][1] |= 1;
+                    wEnt = find_ent_by_owner( 32, "weapon_glock18", id );
+                    g_WarmWeapon[id][1] |= cs_get_weapon_burst( wEnt ) ? 2 : 0;
                 }
             }
+            g_WarmWeapon[id][1] |= ( g_WarmWeapon[id][1] & 6 ? 1 : 0 );
         }
     }
             
     set_task( 0.5, "DelayRespawn", id + OFFSET_RSP );
+    
+    return HAM_IGNORED;
+}
+
+/*
+    This stock is a replacement for the function cs_set_weapon_burst() in module
+    cstrike. Because of unknown reason, cs_set_weapon_burst() func crashes server
+    if the weapon is just about to but not give to the player. So this function
+    directly check pvdata of weapon entity to mark burst status for famas and
+    glock18.
+    
+    @param  are same as func cs_set_weapon_burst()
+    @return 1 - status successfully set
+            0 - status setting failed
+*/
+stock hp_set_weapon_burst( wEnt, bIfOn )
+{
+    new wid = cs_get_weapon_id( wEnt );
+    
+    if( wid == CSW_FAMAS || wid == CSW_GLOCK18 ) {
+        new ws = ( wid == CSW_FAMAS ) ? WEAPON_STATE_FAMAS_BURST : WEAPON_STATE_GLOCK_BURST;
+        new stat = get_pdata_int( wEnt, m_fWeaponState, XO_WEAPON );
+        new val = bIfOn ? ( stat | ws ) : ( stat & ~ws );
+        set_pdata_int( wEnt, m_fWeaponState, val, XO_WEAPON );
+        return 1;
+    }
+    
+    return 0;
+}
+
+/*
+    This function is a HAM forward aims to remove default start weapon in warmup
+    time if you had another warm up secondary. It also set the silence and burst
+    status for corresponding weapons.
+    
+    g_hamFwdGetWeap[0] = RegisterHam( Ham_Item_AddToPlayer, "weapon_glock18", "hamFwdGetWeap", 0 )
+    g_hamFwdGetWeap[1] = RegisterHam( Ham_Item_AddToPlayer, "weapon_usp", "hamFwdGetWeap", 0 )
+    g_hamFwdGetWeap[2] = RegisterHam( Ham_Item_AddToPlayer, "weapon_m4a1", "hamFwdGetWeap", 0 )
+    g_hamFwdGetWeap[3] = RegisterHam( Ham_Item_AddToPlayer, "weapon_famas", "hamFwdGetWeap", 0 )
+    
+    @param  wEnt    :   index of the going picked up weapon
+    @param  id      :   index of spawned player
+    @return none
+*/
+public hamFwdGetWeap( wEnt, id )
+{
+    new wid = cs_get_weapon_id( wEnt );
+    new index = CSW_PRIMARY & ( 1 << wid ) ? 0 : 1;
+    new buff = g_WarmWeapon[id][index];
+
+    if( buff >> 3 != 0 ) {
+        ExecuteHam( Ham_Item_Kill, wEnt );        
+        return HAM_SUPERCEDE;
+    }
+    
+    if( buff & 1 ) {
+        cs_set_weapon_silen( wEnt, buff & 4 ? 1 : 0, 0 );
+        hp_set_weapon_burst( wEnt, buff & 2 ? 1 : 0 );
+        g_WarmWeapon[id][index] &= ~7;
+    }
     
     return HAM_IGNORED;
 }
@@ -1341,7 +1446,7 @@ public hamPostPlayerSpawn( id )
 {
     if( !is_user_alive( id ) ) return HAM_IGNORED;
     
-    static CsTeams: team, buff, wid, stat, wEnt;
+    static CsTeams: team, buff;
     
     cs_set_user_money( id, 16000 );
     set_user_godmode( id, 1 );
@@ -1351,38 +1456,14 @@ public hamPostPlayerSpawn( id )
         case CS_TEAM_T: set_user_rendering( id, kRenderFxGlowShell, 0xff, 0, 0, kRenderNormal, 16 );
         case CS_TEAM_CT: set_user_rendering( id, kRenderFxGlowShell, 0, 0, 0xff, kRenderNormal, 16 );
     }
-    if( ( buff = g_WarmWeapon[id][1] ) != 0 ) {
-        wid = ( buff >> 2 );
-        stat = ( buff & 3 );
-        switch( team ) {
-            case CS_TEAM_T: 
-                if( wid != CSW_GLOCK18 ) {
-                    StripWeapon( id, CSW_GLOCK18 );
-                    give_item( id, WEAPON_NAME[wid] );
-                }
-            case CS_TEAM_CT: 
-                if( wid != CSW_USP ) {
-                    StripWeapon( id, CSW_USP );
-                    give_item( id, WEAPON_NAME[wid] );
-                }
-        }
-        if( ( wid == CSW_GLOCK18 || wid == CSW_USP ) && ( stat != 0 ) ) {
-            wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
-            cs_set_weapon_silen( wEnt, ( stat & 2 ) != 0 ? 1 : 0, 0 );
-            cs_set_weapon_burst( wEnt, ( stat & 1 ) != 0 ? 1 : 0 );
-        }
+    if( ( buff = g_WarmWeapon[id][1] >> 3 ) != 0 ) {
+        g_WarmWeapon[id][1] &= 7;
+        give_item( id, WEAPON_NAME[buff] );        
     }
-    if( ( buff = g_WarmWeapon[id][0] ) != 0 ) {
-        wid = ( buff >> 2 );
-        stat = ( buff & 3 );
-        give_item( id, WEAPON_NAME[wid] );
-        if( ( wid == CSW_M4A1 || wid == CSW_FAMAS ) && ( stat != 0 ) ) {
-            wEnt = find_ent_by_owner( 32, WEAPON_NAME[wid], id );
-            cs_set_weapon_silen( wEnt, ( stat & 2 ) != 0 ? 1 : 0, 0 );
-            cs_set_weapon_burst( wEnt, ( stat & 1 ) != 0 ? 1 : 0 );
-        }
+    if( ( buff = g_WarmWeapon[id][0] >> 3 ) != 0 ) {
+        g_WarmWeapon[id][0] &= 7;
+        give_item( id, WEAPON_NAME[buff] );
     }
-    g_WarmWeapon[id][0] = g_WarmWeapon[id][1] = 0;
     give_item( id, WEAPON_NAME[4] );
     give_item( id, WEAPON_NAME[25] );
     give_item( id, WEAPON_NAME[25] );
@@ -1407,30 +1488,6 @@ public RemoveProtect( tskid )
     set_user_rendering( id, kRenderFxNone );
     
     return;
-}
-
-/*
-    This function hooks the message "WeapPickup" and it's blocks the HUD icon of
-    default secondary weapon if they had an alternative one. This message only
-    registered in warmup time.
-    
-    g_msgidWeapPickup = get_user_msgid( "WeapPickup" )
-    g_hmsgWeapPickup = register_message( g_msgidWeapPickup, "msgWeapPickup" )
-    
-    @param  id          :   index of player
-    @return none
-*/
-public msgWeapPickup( msgid, idest, id )
-{
-    if( !is_user_alive( id ) || g_WarmWeapon[id][1] == 0 ) return PLUGIN_CONTINUE;
-    
-    new wid = ( g_WarmWeapon[id][1] >> 2 );
-    new msgwid = get_msg_arg_int( 1 );
-
-    if( ( ( 1 << msgwid ) & CSW_SECONDARY ) != 0 && wid != msgwid )  
-        return PLUGIN_HANDLED;
-    
-    return PLUGIN_CONTINUE;
 }
 
 /*
@@ -1683,13 +1740,23 @@ fnTeamSelect( id, argn )
     
     switch( argn ) {
         case 1: if( g_Tnum >= 5 && tl == 1 ) {
-            if( !StatLive() ) FireMsgTextMsg( id, CS_TEAM_T );
+            if( !StatLive() )
+#if AMXX_VERSION_NUM < 183
+                FireMsgTextMsg( id, CS_TEAM_T );
+#else
+                client_printex( id, print_center, "#Too_Many_Terrorists" );
+#endif
             client_cmd( id, "chooseteam" );
             
             return PLUGIN_HANDLED;
         }
         case 2: if( g_Cnum >= 5 && tl == 1 ) {
-            if( !StatLive() ) FireMsgTextMsg( id, CS_TEAM_CT );
+            if( !StatLive() )
+#if AMXX_VERSION_NUM < 183
+                FireMsgTextMsg( id, CS_TEAM_CT );
+#else
+                client_printex( id, print_center, "#Too_Many_CTs" );
+#endif
             client_cmd( id, "chooseteam" );
             
             return PLUGIN_HANDLED;
@@ -1853,7 +1920,7 @@ public PlayerReady( id )
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_READYMSG", g_name[id] );
         
     RefreshReadyList();
-    AutoStart( false, -1 );
+    AutoStart( 0, -1 );
     
     return PLUGIN_HANDLED;
 }
@@ -1902,20 +1969,31 @@ public PlayerUNReady( id )
                             round, respectively.
     @return none
 */
-AutoStart( bool: force, ifKnife )
+AutoStart( force, ifKnife )
 {
     if( g_rdy != 10 && !force ) return;
         
     if( g_Cnum * g_Tnum == 0 ) {
         set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
         show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_CANNOTBEGIN" );
-        if( g_rdy == 10 ) for( new i = 0; i < MAX_PLAYERS; i++ )
-            if( g_ready[i + 1] ) {
-                PlayerUNReady( i + 1 );
+        if( g_rdy == 10 ) for( new id = 1; id <= g_SvMaxPlayers; id++ )
+            if( g_ready[id] ) {
+                PlayerUNReady( id );
                 break;
             }
             
         return;
+    }
+    
+    if( get_pcvar_num( g_pcLog ) ) {
+        if( !StatMatch() ) {
+            stop_match_log( g_hlogfile );
+            g_hlogfile = create_match_log();
+        }
+        if( force )
+            log_match( g_hlogfile, "Match begins! Begin type: Admin %s begins the match!", g_name[force] );
+        else
+            log_match( g_hlogfile, "Match begins! Begin type: All players have been ready!" );
     }
         
     if( g_rdy == 10 ) {
@@ -2008,6 +2086,9 @@ public EnterWarm()
 {
     static fname[32], fpath[64], len;
     
+    // stop logging
+    stop_match_log( g_hlogfile );
+    
     // block map objective
     SetMapObjective( false );
     SetBlockRoundTimer( true );
@@ -2070,6 +2151,10 @@ StopWarm()
     
     // get match parameters
     g_MaxRound = get_pcvar_num( g_pcMaxRound );
+    if( get_pcvar_string( g_pcTeamTTag, g_szTTag, charsmax( g_szTTag ) ) == 0 ) 
+        formatex( g_szTTag, charsmax( g_szTTag ), "%L", LANG_SERVER, "PUG_TNAME" );
+    if( get_pcvar_string( g_pcTeamCTTag, g_szCTTag, charsmax( g_szCTTag ) ) == 0 ) 
+        formatex( g_szCTTag, charsmax( g_szCTTag ), "%L", LANG_SERVER, "PUG_CTNAME" );    
     get_pcvar_string( g_pcMatchCfg, fname, 31 );
     len = get_configsdir( fpath, 63 );
     len += formatex( fpath[len], 63 - len, "/%s/%s", PUG_CONFIG_DIR, fname );
@@ -2083,6 +2168,22 @@ StopWarm()
     }
     else
         ServerSay( 0, "%L", LANG_SERVER, "PUG_CFGNOTFOUND", fname );
+        
+    if( get_pcvar_num( g_pcLog ) ) {
+        static tp[256], lent, cp[256], lenc, id;
+        log_match( g_hlogfile, "Match config file name: %s", fname );
+        get_mapname( fname, 31 );
+        log_match( g_hlogfile, "Match map name: %s", fname );
+        lent = formatex( tp, 255, "%s:", g_szTTag );
+        lenc = formatex( cp, 255, "%s:", g_szCTTag );
+        for( id = 1; id <= g_SvMaxPlayers; id++ )
+            switch( g_teamHash[id] ) {
+                case CS_TEAM_T: lent += formatex( tp[lent], 255 - lent, " | %s", g_name[id] );
+                case CS_TEAM_CT: lenc += formatex( cp[lenc], 255 - lenc, " | %s", g_name[id] );
+            }
+        log_match( g_hlogfile, tp );
+        log_match( g_hlogfile, cp );
+    }
     
     return;
 }
@@ -2142,12 +2243,12 @@ public KnifeRoundMsg()
 */
 KnifeRoundWon( CsTeams: team )
 {
-    static teamname[16];
+    static teamname[32];
     
     if( team == CS_TEAM_T )
-        formatex( teamname, 15, "%L", LANG_SERVER, "PUG_TNAME" );
+        formatex( teamname, 31, g_szTTag );
     else
-        formatex( teamname, 15, "%L", LANG_SERVER, "PUG_CTNAME" );
+        formatex( teamname, 31, g_szCTTag );
     set_dhudmessage( 0xff, 0xff, 0xff, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_KNIFEWON_MSG", teamname );
 
@@ -2314,11 +2415,11 @@ public EnterSecondHalf()
 */
 MatchWin( CsTeams: team )
 {
-    static teamname[16];
+    static teamname[32];
     
     switch( team ) {
-        case CS_TEAM_T: formatex( teamname, 15, "%L", LANG_SERVER, "PUG_TNAME" );
-        case CS_TEAM_CT: formatex( teamname, 15, "%L", LANG_SERVER, "PUG_CTNAME" );
+        case CS_TEAM_T: formatex( teamname, 31, g_szTTag );
+        case CS_TEAM_CT: formatex( teamname, 31, g_szCTTag );
     }
     set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_MATCHNOT[0], HUD_POS_MATCHNOT[1], 0, 0.0, 5.0, 0.1, 0.1 );
     show_dhudmessage( 0, "%L", LANG_SERVER, "PUG_MATCHEND_HUD", g_Score[0][0] + g_Score[0][1], g_Score[1][0] + g_Score[1][1], teamname );
@@ -2484,7 +2585,8 @@ UpdateRoundNum()
 //  ┌──────────────────────────┐
 //  │  MENU RELATED FUNCTIONS  │
 //  └──────────────────────────┘
-//      ┌ MenuBuildShowPickTeam
+//      → MenuPreBuildFunc
+//      ┌ MenuBuildShowPickTeam ←
 //      ├ MenuSetPickTeam ←
 //      │   └ MenuShowPickTeam ←
 //      │       └ MenuJudgePickTeamVote ←
@@ -2516,6 +2618,18 @@ UpdateRoundNum()
 //==============================================================================
 
 /*
+    This function implements the pre-build process of some menu items
+*/
+public MenuPreBuildFunc()
+{
+    MenuBuildPickTeam();
+    MenuBuildMatchMenu();
+    MenuBuildPlayerMenu();
+    
+    return;
+}
+
+/*
     These bunch of functions aims to proceed with a menu that shows after knife
     round to let the winner's team to pick the team they want. The pre-
     build function is called in plugin_cfg()
@@ -2538,17 +2652,15 @@ MenuBuildPickTeam()
 MenuSetPickTeam( CsTeams: team )
 {
     const T_SHOWPICKTEAM = 10;
-    static id, i, tid;
+    static id, tid;
     
     g_bIsOnVote = true;     // set voting on flag
     remove_task( g_tskidOnVote, 0 );
-    for( i = 0; i < MAX_PLAYERS; i++ ) {
-        tid = i + 1;
+    for( tid = 1; tid <= g_SvMaxPlayers; tid++ ) 
         if( ( id = g_SwapBeRQ[tid] ) != 0 && g_teamHash[tid] == team ) {
             g_SwapBeRQ[tid] = g_SwapRequest[id] = 0;
             remove_task( tid + OFFSET_COUNT_MENU_SWAPASK, 0 );
         }
-    }
     g_tskidOnVote = _:( team ) + OFFSET_COUNT_MENU_PICKTEAM;
     arrayset( g_bTeamPicked, false, sizeof( g_bTeamPicked ) );
     g_mPickTeamAgree = g_countPickTeam = 0;
@@ -2562,12 +2674,11 @@ MenuSetPickTeam( CsTeams: team )
 public MenuShowPickTeam( tskid )
 {
     new CsTeams: team = CsTeams:( tskid - OFFSET_COUNT_MENU_PICKTEAM );
-    static msg[256], i, id;
+    static msg[256], id;
     
     if( --g_countdownPickTeam > 0 ) {
         formatex( msg, 255, "%s %d", g_szMenuPickTeam, g_countdownPickTeam );
-        for( i = 0; i < MAX_PLAYERS; i++ ) {
-            id = i + 1;
+        for( id = 1; id <= g_SvMaxPlayers; id++ ) {
             if( !is_user_connected( id ) || g_bTeamPicked[id] || 
                 g_teamHash[id] != team ) 
                 continue;
@@ -2647,8 +2758,8 @@ public SwapCenterCountDown( tskid )
 MenuShowSwapMenu( id )
 {
     new CsTeams: team = g_teamHash[id];
-    new i, tid, hSwapMenu;
-    static szMenuTitle[64], name[32], szid[3], Msg[128];
+    static tid, hSwapMenu;
+    static szMenuTitle[64], name[32], szid[3], Msg[64];
     
     if( g_SwapRequest[id] != 0 ) {
         client_print( id, print_center, "%L", LANG_SERVER, "PUG_MENU_ALRDYRQSWAP" );
@@ -2657,8 +2768,7 @@ MenuShowSwapMenu( id )
     
     formatex( szMenuTitle, 63, "\y%L", LANG_SERVER, "PUG_MENU_SWAPTITLE" );
     hSwapMenu = menu_create( szMenuTitle, "MenucmdSwapMenu" );
-    for( i = 0; i < MAX_PLAYERS; i++ ) {
-        tid = i + 1;
+    for( tid = 1; tid <= g_SvMaxPlayers; tid++ ) {
         if( !is_user_connected( tid ) ) continue;
         if( tid == id || g_teamHash[tid] == team || g_teamHash[tid] == CS_TEAM_UNASSIGNED )
             continue;
@@ -2666,11 +2776,11 @@ MenuShowSwapMenu( id )
         get_user_name( tid, name, 31 );
         switch( g_teamHash[tid] ) {
             case CS_TEAM_T:
-                formatex( Msg, 127, "(%L) %s", LANG_SERVER, "PUG_TNAME", name );
+                formatex( Msg, 63, "(%s) %s", g_szTTag, name );
             case CS_TEAM_CT:
-                formatex( Msg, 127, "(%L) %s", LANG_SERVER, "PUG_CTNAME", name );
+                formatex( Msg, 63, "(%s) %s", g_szCTTag, name );
             case CS_TEAM_SPECTATOR:
-                formatex( Msg, 127, "(%L) %s", LANG_SERVER, "PUG_SPECNAME", name );
+                formatex( Msg, 63, "(%L) %s", LANG_SERVER, "PUG_SPECNAME", name );
         }
         formatex( szid, 2, "%d", tid );
         menu_additem( hSwapMenu, Msg, szid, ADMIN_ALL );
@@ -2713,14 +2823,14 @@ public MenucmdSwapMenu( id, menu, item )
 MenuSetSwapAsk( tid )
 {
     static const   T_SWAPASK   =   10;
-    static szMenu[256], len, name1[32], name2[32], tn[16];
+    static szMenu[256], len, name1[32], name2[32], tn[32];
     new id = g_SwapBeRQ[tid], CsTeams: team = g_teamHash[id];
     
     get_user_name( id, name1, 31 );
     get_user_name( tid, name2, 31 );
     switch( team ) {
-        case CS_TEAM_T: formatex( tn, 15, "%L", LANG_SERVER, "PUG_TNAME" );
-        case CS_TEAM_CT: formatex( tn, 15, "%L", LANG_SERVER, "PUG_CTNAME" );
+        case CS_TEAM_T: formatex( tn, 31, g_szTTag );
+        case CS_TEAM_CT: formatex( tn, 31, g_szCTTag );
     }
     ServerSay( 0, "%L", LANG_SERVER, "PUG_MENU_SWAPRQMSG", name1, name2 );
     len = formatex( szMenu, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_SWAPASKTITLE", tn, name1 );
@@ -2835,8 +2945,14 @@ MenuBuildMatchMenu()
     menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
     formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSWAPTEAM" ); tag[0]++;
     menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_MATCHSTARTMENU" ); tag[0]++;
+    menu_additem( g_hmMatchMenu, msg, tag, PLUGIN_ACCESS );
     formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_EXITNAME" );
     menu_setprop( g_hmMatchMenu, MPROP_EXITNAME, msg );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_NEXTPAGE" );
+    menu_setprop( g_hmMatchMenu, MPROP_NEXTNAME, msg );
+    formatex( msg, 127, "%L", LANG_SERVER, "PUG_MENU_PREVPAGE" );
+    menu_setprop( g_hmMatchMenu, MPROP_BACKNAME, msg );
     
     return;
 }
@@ -2852,12 +2968,11 @@ public MenuShowMatchMenu( id, level, cid )
 
 public MenucmdMatchMenu( id, menu, item )
 {       
-    static info[2], name[2], _access, _callback, key;
+    static info[2], name[2], _access, _callback;
     
     if( item == MENU_EXIT ) return;
     menu_item_getinfo( menu, item, _access, info, 1, name, 1, _callback );
-    key = str_to_num( info );
-    switch( key ) {
+    switch( str_to_num( info ) ) {
         case 1: client_cmd( id, "hp_forcestart -knife" );
         case 2: client_cmd( id, "hp_forcestart -noknife" );
         case 3: client_cmd( id, "hp_forcehalfr3" );
@@ -2865,9 +2980,78 @@ public MenucmdMatchMenu( id, menu, item )
         case 5: client_cmd( id, "hp_forcestop" );
         case 6: client_cmd( id, "amx_pause" );
         case 7: client_cmd( id, "hp_forceswap" );
+        case 8: MenuBuildMatchBeginMenu( id );
     }
     
     return;
+}
+
+/*
+    These bunch of functions aims to build a menu to let admins specifies
+    match parameters before start the match.
+    
+    Show Menu func      :   MenuShowVoteMap
+    Menu Select func    :   MenucmdVoteMap
+    Result func         :   MenuJudgeVoteMap
+*/
+
+public SetTsTag( id, level, cid )
+{
+    if( !cmd_access( id, level, cid, 2 ) ) return PLUGIN_HANDLED;
+    
+    static tname[32];
+    
+    read_argv( 1, tname, 31 );
+    set_pcvar_string( g_pcTeamTTag, tname );
+    
+    return PLUGIN_HANDLED;
+}
+
+public SetCTsTag( id, level, cid )
+{
+    if( !cmd_access( id, level, cid, 2 ) ) return PLUGIN_HANDLED;
+    
+    static tname[32];
+    
+    read_argv( 1, tname, 31 );
+    set_pcvar_string( g_pcTeamCTTag, tname );
+    
+    return PLUGIN_HANDLED;
+}
+
+
+public MenuBuildMatchBeginMenu( id )
+{
+    new hMenu = menu_create( "Match begin", "MenucmdMatchBeginMenu" );
+    static ttag[32], cttag[32], msg[128];
+    
+    if( !get_pcvar_string( g_pcTeamTTag, ttag, 31 ) ) formatex( ttag, 31, "%L", LANG_SERVER, "PUG_TNAME" );
+    if( !get_pcvar_string( g_pcTeamCTTag, cttag, 31 ) ) formatex( cttag, 31, "%L", LANG_SERVER, "PUG_CTNAME" );    
+    formatex( msg, 127, "Modify T team tag: \R\r%s", ttag );
+    menu_additem( hMenu, msg, "1", PLUGIN_ACCESS );
+    formatex( msg, 127, "Modify CT team tag: \R\r%s", cttag );
+    menu_additem( hMenu, msg, "2", PLUGIN_ACCESS );
+    
+    menu_display( id, hMenu );
+}
+
+public MenucmdMatchBeginMenu( id, menu, item )
+{
+    static info[2], name[2], _access, _callback;
+
+    menu_item_getinfo( menu, item, _access, info, 1, name, 1, _callback );
+    menu_destroy( menu );
+    if( item == MENU_EXIT ) return;
+    switch( str_to_num( info ) ) {
+        case 1:  {
+            client_cmd( id, "messagemode hp_setttag" );
+            MenuBuildMatchBeginMenu( id );
+        }
+        case 2:  {
+            client_cmd( id, "messagemode hp_setcttag" );
+            MenuBuildMatchBeginMenu( id );
+        }
+    }
 }
 
 /*
@@ -2941,12 +3125,9 @@ public MenuShowVoteMap( const szt[], tskid )
 
     if( --g_countdownVoteMap > 0 ) {
         formatex( szMenu, 511, "%s %d", szt, g_countdownVoteMap );
-        for( new i = 0; i < MAX_PLAYERS; i++ ) {
-            id = i + 1;
-            if( g_teamHash[id] != CS_TEAM_UNASSIGNED && !g_bMapVoted[id] ) {
+        for( id = 1; id <= g_SvMaxPlayers; id++ )
+            if( g_teamHash[id] != CS_TEAM_UNASSIGNED && !g_bMapVoted[id] )
                 show_menu( id, keys, szMenu, 1, "#PUG_Menu_VoteMap" );
-            }
-        }
     }
     else
         MenuJudgeVoteMap();
@@ -3023,17 +3204,16 @@ public MenuShowVoteKick( tid )
     }
     
     static Msg[128], teamname[32], name[32], szid[3];
-    new hMenu, i, id, CsTeams: team;
+    static hMenu, id, CsTeams: team;
 
     formatex( Msg, 127, "\y%L", LANG_SERVER, "PUG_MENU_VOTEKICKTITLE" );
     hMenu = menu_create( Msg, "MenucmdVoteKick" );
-    for( i = 0; i < MAX_PLAYERS; i++ ) {
-        id = i + 1;
+    for( id = 1; id <= g_SvMaxPlayers; id++ ) {
         if( !is_user_connected( id ) ) continue;
         team = g_teamHash[id];
         switch( team ) {
-            case CS_TEAM_T: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_TNAME" );
-            case CS_TEAM_CT: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_CTNAME" );
+            case CS_TEAM_T: formatex( teamname, 31, g_szTTag );
+            case CS_TEAM_CT: formatex( teamname, 31, "%L", g_szCTTag );
             case CS_TEAM_SPECTATOR: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_SPECNAME" );
         }
         get_user_name( id, name, 31 );
@@ -3090,8 +3270,8 @@ MenuSetAskKick( kicker, kickid )
     arrayset( g_bKickVoted, false, sizeof( g_bKickVoted ) );
     team = g_teamHash[kickid];
     switch( team ) {
-        case CS_TEAM_T: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_TNAME" );
-        case CS_TEAM_CT: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_CTNAME" );
+        case CS_TEAM_T: formatex( teamname, 31, g_szTTag );
+        case CS_TEAM_CT: formatex( teamname, 31, g_szCTTag );
         case CS_TEAM_SPECTATOR: formatex( teamname, 31, "%L", LANG_SERVER, "PUG_SPECNAME" );
     }
     len = formatex( szMenu, 255, "\y%L^n^n", LANG_SERVER, "PUG_MENU_KICKASKTITLE", g_name[kicker], teamname, g_name[kickid] );
@@ -3108,15 +3288,13 @@ MenuSetAskKick( kicker, kickid )
 
 public MenuShowAskKick( const szt[], tskid )
 {
-    static szMenu[256], id, i;
+    static szMenu[256], id;
     
     if( --g_countdownVoteKick > 0 ) {
         formatex( szMenu, 255, "%s %d", szt, g_countdownVoteKick );
-        for( i = 0; i < MAX_PLAYERS; i++ ) {
-            id = i + 1;
+        for( id = 1; id <= g_SvMaxPlayers; id++ )
             if( g_teamHash[id] != CS_TEAM_UNASSIGNED && !g_bKickVoted[id] )
                 show_menu( id, 3, szMenu, 1, "#PUG_Menu_VoteKick" );
-        }
     }
     else
         MenuJudgeAskKick();
@@ -3267,7 +3445,7 @@ public ForceStart( id, level, cid )
         set_dhudmessage( 0xff, 0x00, 0x00, HUD_POS_ACT[0], HUD_POS_ACT[1], 0, 0.0, 5.0, 0.1, 0.1 );
         show_dhudmessage( 0, Msg );
         
-        AutoStart( true, ifknife );
+        AutoStart( id, ifknife );
     }
         
     return PLUGIN_HANDLED;
@@ -3449,14 +3627,10 @@ public plugin_end()
 public plugin_cfg()
 {
     set_task( 1.0, "CheckHostName" );
+    set_task( 1.0, "MenuPreBuildFunc" );
     
     LoadSettings();
     readMap();
-    
-    // pre-build some menus
-    MenuBuildPickTeam();
-    MenuBuildMatchMenu();
-    MenuBuildPlayerMenu();
     
     // initialize all Sync HUD Objs
     g_hsyncReadyList    =   CreateHudSyncObj();
@@ -3464,6 +3638,8 @@ public plugin_cfg()
     g_hsyncNotify       =   CreateHudSyncObj();
     g_hsyncShowMoney    =   CreateHudSyncObj();
     g_hsync5Link        =   CreateHudSyncObj();
+    
+    g_SvMaxPlayers = get_maxplayers();
      
     EnterWarm();
     
@@ -3476,6 +3652,7 @@ public plugin_init()
     
     register_dictionary( "hustcommon.txt" );
 
+    g_pcLog             = register_cvar( "hp_log", "1" );
     g_pcKnifeRound      = register_cvar( "hp_kniferound", "1" );
     g_pcTeamLimit       = register_cvar( "hp_teamlimit", "1" );
     g_pcShowMoney       = register_cvar( "hp_showmoney", "1" );
@@ -3485,6 +3662,8 @@ public plugin_init()
     g_pcMatchCfg        = register_cvar( "hp_matchcfg", "MatchCfg.cfg" );
     g_pcEnable5Link     = register_cvar( "hp_enable5link", "1" );
     g_pcLinkTime        = register_cvar( "hp_linktime", "10" );
+    g_pcTeamTTag        = register_cvar( "hp_teamttag", "" );
+    g_pcTeamCTTag       = register_cvar( "hp_teamcttag", "" );
     
     g_pcAmxShowAct      = get_cvar_pointer( "amx_show_activity" );
     g_pcHostName        = get_cvar_pointer( "hostname" );
@@ -3510,12 +3689,18 @@ public plugin_init()
     register_concmd( "hp_forcehalfr3", "ForceHalfR3", PLUGIN_ACCESS, " - use this command to restart half matching" );
     register_concmd( "hp_forcestop", "ForceStop", PLUGIN_ACCESS, " - use this command to force the game stop and enter warm section" );
     register_concmd( "hp_forceswap", "ForceSwap", PLUGIN_ACCESS, " - use this command to force team swap" );
+    register_concmd( "hp_setttag", "SetTsTag", PLUGIN_ACCESS, " - set team tag for Terrorists" );
+    register_concmd( "hp_setcttag", "SetCTsTag", PLUGIN_ACCESS, " - set team tag for CTs" );
     
     register_event( "CurWeapon", "eventCurWeapon", "be", "1=0", "2=29" );
     register_event( "HLTV", "eventNewRoundStart", "a", "1=0", "2=0" );
     register_event( "ResetHUD", "eventResetHUD", "b" );
     register_event( "TeamInfo", "eventTeamInfo", "a" );
     
+    g_hamFwdGetWeap[0]  = RegisterHam( Ham_Item_AddToPlayer, "weapon_glock18", "hamFwdGetWeap", 0 );
+    g_hamFwdGetWeap[1]  = RegisterHam( Ham_Item_AddToPlayer, "weapon_usp", "hamFwdGetWeap", 0 );
+    g_hamFwdGetWeap[2]  = RegisterHam( Ham_Item_AddToPlayer, "weapon_famas", "hamFwdGetWeap", 0 );
+    g_hamFwdGetWeap[3]  = RegisterHam( Ham_Item_AddToPlayer, "weapon_m4a1", "hamFwdGetWeap", 0 );
     g_hamPostSpawn      = RegisterHam( Ham_Spawn, "player", "hamPostPlayerSpawn", 1 );
     g_hamFwdDeath       = RegisterHam( Ham_Killed, "player", "hamFwdPlayerDeath", 0 );
     g_hamPostTouch[0]   = RegisterHam( Ham_Touch, "armoury_entity", "hamPostWeaponTouch", 1 );
@@ -3527,7 +3712,6 @@ public plugin_init()
     g_msgidTeamScore    = get_user_msgid( "TeamScore" );
     g_msgidHideWeapon   = get_user_msgid( "HideWeapon" );
     g_msgidRoundTime    = get_user_msgid( "RoundTime" );
-    g_msgidWeapPickup   = get_user_msgid( "WeapPickup" );
     g_msgidCurWeapon    = get_user_msgid( "CurWeapon" );
     g_msgidTextMsg      = get_user_msgid( "TextMsg" );
     g_msgidClCorpse     = get_user_msgid( "ClCorpse" );
